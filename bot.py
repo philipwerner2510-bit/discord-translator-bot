@@ -97,4 +97,5 @@ async def on_ready():
     await bot.tree.sync()
     print(f"✅ Logged in as {bot.user} — ready for translations!")
 
+print("DEBUG TOKEN:", os.getenv("BOT_TOKEN"))
 bot.run(os.getenv("BOT_TOKEN"))
