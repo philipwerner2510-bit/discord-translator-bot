@@ -118,4 +118,4 @@ async def on_ready():
     except Exception as e:
         print(e)
 
-bot.run(os.getenv("MTQyNTU5MDgzNjgwMDAwMDE3MA.GUm-PZ.oSk7pGbcAF5IQFdo9x571xJnVkxBebxBcDb06k"))
+bot.run(os.getenv("BOT_TOKEN"))
