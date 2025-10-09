@@ -1,101 +1,101 @@
+import os
 import discord
 from discord.ext import commands
 from discord import app_commands
-from deep_translator import GoogleTranslator
-import os
+from googletrans import Translator
 
 intents = discord.Intents.default()
-intents.messages = True
-intents.reactions = True
 intents.message_content = True
+intents.reactions = True
+intents.messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+translator = Translator()
 
-# Store user languages and active channels
+# Store allowed channels and user languages in memory
+allowed_channels = set()
 user_languages = {}
-active_channels = set()
 
-# 🌍 Command: Choose which channels translation should work in
-@bot.tree.command(name="setchannels", description="Select which channels the translator should work in.")
-@app_commands.describe(channels="Comma-separated list of channels (by name) where translation is active.")
-async def set_channels(interaction: discord.Interaction, channels: str):
-    channel_names = [ch.strip() for ch in channels.split(",")]
-    added = []
-    for name in channel_names:
-        for ch in interaction.guild.text_channels:
-            if ch.name == name:
-                active_channels.add(ch.id)
-                added.append(ch.name)
-    if added:
-        await interaction.response.send_message(
-            f"✅ Translator active in: {', '.join(added)}", ephemeral=True
-        )
-    else:
-        await interaction.response.send_message(
-            "⚠️ No matching channels found. Make sure to use exact channel names.", ephemeral=True
-        )
+# --- Slash command for setting channels (Admin only) ---
+class ChannelSelect(discord.ui.Select):
+    def __init__(self, channels):
+        options = [
+            discord.SelectOption(label=ch.name, value=str(ch.id)) for ch in channels
+        ]
+        super().__init__(placeholder="Select channels to enable the bot in...", min_values=1, max_values=len(options), options=options)
 
-# 🌐 Command: Let user pick their target language
-@bot.tree.command(name="setlanguage", description="Choose your language for automatic translations.")
-@app_commands.describe(language="Enter your target language (e.g. english, german, arabic, etc.)")
-async def set_language(interaction: discord.Interaction, language: str):
+    async def callback(self, interaction: discord.Interaction):
+        global allowed_channels
+        selected_ids = {int(v) for v in self.values}
+        allowed_channels = selected_ids
+        await interaction.response.send_message(f"✅ Enabled translation in {len(selected_ids)} channels.", ephemeral=True)
+
+class ChannelSelectView(discord.ui.View):
+    def __init__(self, channels):
+        super().__init__()
+        self.add_item(ChannelSelect(channels))
+
+@bot.tree.command(name="setchannel", description="Select which channels the bot should monitor (Admin only).")
+@app_commands.checks.has_permissions(administrator=True)
+async def setchannel(interaction: discord.Interaction):
+    channels = [ch for ch in interaction.guild.text_channels]
+    view = ChannelSelectView(channels)
+    await interaction.response.send_message("Select channels:", view=view, ephemeral=True)
+
+@setchannel.error
+async def setchannel_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.errors.MissingPermissions):
+        await interaction.response.send_message("❌ You need admin rights to use this command.", ephemeral=True)
+
+# --- Slash command to set user language ---
+@bot.tree.command(name="setlanguage", description="Set your preferred translation language (e.g. en, de, fr, ja)")
+async def setlanguage(interaction: discord.Interaction, language: str):
     user_languages[interaction.user.id] = language.lower()
-    await interaction.response.send_message(f"✅ Your language has been set to **{language.title()}**.", ephemeral=True)
+    await interaction.response.send_message(f"✅ Your translation language has been set to `{language}`.", ephemeral=True)
 
-# 🆕 Automatically react to every message in active channels
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-    if message.channel.id in active_channels:
-        try:
-            await message.add_reaction("🔃")
-        except discord.Forbidden:
-            print(f"⚠️ Missing permission to add reaction in {message.channel}")
-    await bot.process_commands(message)
-
-# 🔃 Reaction event: translate message when user reacts
+# --- Reaction listener ---
 @bot.event
 async def on_reaction_add(reaction, user):
     if user.bot:
         return
-    if reaction.emoji != "🔃":
-        return
-    if reaction.message.channel.id not in active_channels:
-        return
-    if user.id not in user_languages:
+
+    if str(reaction.emoji) == "🔃":
+        if reaction.message.channel.id not in allowed_channels:
+            return
+
         try:
-            await user.send("⚙️ Please set your language first using `/setlanguage`.")
-        except:
-            pass
-        try:
+            # Remove user’s reaction
             await reaction.remove(user)
         except:
             pass
-        return
 
-    target_lang = user_languages[user.id]
-    original_text = reaction.message.content
+        # Get user language (default English)
+        target_lang = user_languages.get(user.id, "en")
 
-    try:
-        translated = GoogleTranslator(source='auto', target=target_lang).translate(original_text)
-        await reaction.message.reply(translated, mention_author=False, silent=True)
-    except Exception as e:
+        text = reaction.message.content
+        if not text:
+            return
+
         try:
-            await user.send(f"❌ Translation error: {e}")
-        except:
-            pass
+            translated = translator.translate(text, dest=target_lang)
+            dm = await user.create_dm()
+            await dm.send(f"**Translated ({target_lang})**:\n{translated.text}")
+        except Exception as e:
+            print(f"Error translating: {e}")
+            try:
+                await user.send("⚠️ Translation failed. Please try again later.")
+            except:
+                pass
 
-    # Remove the user's reaction to keep message clean
-    try:
-        await reaction.remove(user)
-    except:
-        pass
-
+# --- On ready ---
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
-    print(f"✅ Logged in as {bot.user} — ready for translations!")
+    print(f"✅ Logged in as {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"Slash commands synced ({len(synced)})")
+    except Exception as e:
+        print(f"Error syncing commands: {e}")
 
-print("DEBUG TOKEN:", os.getenv("BOT_TOKEN"))
+# --- Run the bot ---
 bot.run(os.getenv("BOT_TOKEN"))
