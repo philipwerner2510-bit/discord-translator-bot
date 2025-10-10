@@ -1,127 +1,121 @@
-import os
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 from googletrans import Translator
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
 
 intents = discord.Intents.default()
 intents.messages = True
-intents.message_content = True
 intents.reactions = True
+intents.message_content = True
+intents.guilds = True
+intents.dm_messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 translator = Translator()
 
-# Memory storage
-allowed_channels = set()
-user_languages = {}
+# Store guild-specific translation channels
+translation_channels = {}
 
-# --- Slash command for setting channels (Admin only) ---
-class ChannelSelect(discord.ui.Select):
-    def __init__(self, channels):
-        options = [
-            discord.SelectOption(label=ch.name, value=str(ch.id))
-            for ch in channels
-        ]
-        super().__init__(
-            placeholder="✅ Select channels to enable the bot in",
-            min_values=1,
-            max_values=len(options),
-            options=options,
-        )
+# Load saved channels from a file (optional for persistence)
+if os.path.exists("channels.txt"):
+    with open("channels.txt", "r") as f:
+        for line in f:
+            guild_id, channel_id = line.strip().split(":")
+            translation_channels[int(guild_id)] = int(channel_id)
 
-    async def callback(self, interaction: discord.Interaction):
-        global allowed_channels
-        selected = {int(v) for v in self.values}
-        allowed_channels = selected
-        names = [f"#{interaction.guild.get_channel(cid).name}" for cid in selected]
-        await interaction.response.edit_message(
-            content="✅ Enabled translation in:\n" + "\n".join(names),
-            view=None
-        )
 
-class ChannelSelectView(discord.ui.View):
-    def __init__(self, channels):
-        super().__init__(timeout=60)
-        self.add_item(ChannelSelect(channels))
-
-@bot.tree.command(name="setchannel", description="Select which channels the bot will monitor (Admin only).")
-@app_commands.checks.has_permissions(administrator=True)
-async def setchannel(interaction: discord.Interaction):
-    channels = [ch for ch in interaction.guild.text_channels]
-    view = ChannelSelectView(channels)
-    await interaction.response.send_message(
-        "Select channels to enable translation:", view=view, ephemeral=True
-    )
-
-@setchannel.error
-async def setchannel_error(interaction: discord.Interaction, error):
-    if isinstance(error, app_commands.errors.MissingPermissions):
-        await interaction.response.send_message("❌ You need admin rights to use this command.", ephemeral=True)
-
-# --- Slash command to set preferred language ---
-@bot.tree.command(name="setlanguage", description="Set your preferred translation language (e.g. en, de, fr, ja)")
-async def setlanguage(interaction: discord.Interaction, language: str):
-    user_languages[interaction.user.id] = language.lower()
-    await interaction.response.send_message(
-        f"✅ Your preferred language is now `{language}`.",
-        ephemeral=True
-    )
-
-# --- Add 🔃 automatically to messages in allowed channels ---
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-    if message.channel.id in allowed_channels:
-        try:
-            await message.add_reaction("🔃")
-        except Exception as e:
-            print(f"Couldn't react: {e}")
-    await bot.process_commands(message)
-
-# --- Handle 🔃 reactions ---
-@bot.event
-async def on_reaction_add(reaction, user):
-    if user.bot:
-        return
-    if str(reaction.emoji) != "🔃":
-        return
-    if reaction.message.channel.id not in allowed_channels:
-        return
-
-    try:
-        await reaction.remove(user)
-    except:
-        pass
-
-    text = reaction.message.content
-    if not text:
-        return
-
-    target_lang = user_languages.get(user.id, "en")
-
-    try:
-        translated = translator.translate(text, dest=target_lang)
-        dm = await user.create_dm()
-        await dm.send(
-            f"💬 **Original:**\n{text}\n\n🌍 **Translated ({target_lang}):**\n{translated.text}"
-        )
-    except Exception as e:
-        print(f"Error translating: {e}")
-        try:
-            await user.send("⚠️ Translation failed. Please try again.")
-        except:
-            pass
-
-# --- Startup ---
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     try:
         synced = await bot.tree.sync()
-        print(f"✅ Synced {len(synced)} commands.")
+        print(f"✅ Synced {len(synced)} commands")
     except Exception as e:
-        print(f"Sync failed: {e}")
+        print(f"❌ Sync failed: {e}")
 
-bot.run(os.getenv("BOT_TOKEN"))
+
+@bot.tree.command(name="setchannel", description="Set the translation reaction channel (Admin only)")
+@app_commands.checks.has_permissions(administrator=True)
+async def setchannel(interaction: discord.Interaction):
+    guild = interaction.guild
+    channels = [c for c in guild.text_channels if c.permissions_for(guild.me).send_messages]
+
+    # Create selection menu
+    options = [
+        discord.SelectOption(label=c.name, description=f"Set {c.name} for translations", value=str(c.id))
+        for c in channels[:25]
+    ]
+
+    select = discord.ui.Select(placeholder="Select a translation channel", options=options)
+
+    async def select_callback(interaction2: discord.Interaction):
+        selected_channel_id = int(select.values[0])
+        translation_channels[guild.id] = selected_channel_id
+
+        # Save it persistently
+        with open("channels.txt", "w") as f:
+            for gid, cid in translation_channels.items():
+                f.write(f"{gid}:{cid}\n")
+
+        await interaction2.response.send_message(
+            f"✅ Translation channel set to <#{selected_channel_id}>", ephemeral=True
+        )
+
+    select.callback = select_callback
+    view = discord.ui.View()
+    view.add_item(select)
+
+    await interaction.response.send_message("Select a channel for translation reactions:", view=view, ephemeral=True)
+
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    # Only react in designated channel
+    channel_id = translation_channels.get(message.guild.id)
+    if channel_id and message.channel.id == channel_id:
+        await message.add_reaction("🔃")
+
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    if user.bot:
+        return
+
+    if str(reaction.emoji) == "🔃":
+        msg = reaction.message
+        await reaction.remove(user)  # remove user’s reaction immediately
+
+        # Ask user privately which language they want
+        try:
+            await user.send("🌐 Please reply with a language code (e.g., `en` for English, `fr` for French, `de` for German):")
+            def check(m):
+                return m.author == user and isinstance(m.channel, discord.DMChannel)
+
+            reply = await bot.wait_for("message", check=check, timeout=60)
+            lang = reply.content.strip().lower()
+
+            translated = translator.translate(msg.content, dest=lang)
+            await user.send(
+                f"✅ **Translated Message:**\n\n{translated.text}\n\n🌍 Language: {lang}"
+            )
+
+        except Exception as e:
+            await user.send(f"❌ Error during translation: {e}")
+
+
+@setchannel.error
+async def setchannel_error(interaction, error):
+    if isinstance(error, app_commands.errors.MissingPermissions):
+        await interaction.response.send_message(
+            "🚫 You need **Administrator** permissions to use this command.", ephemeral=True
+        )
+
+bot.run(TOKEN)
