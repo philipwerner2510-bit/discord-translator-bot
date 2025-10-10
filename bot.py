@@ -212,7 +212,6 @@ async def on_message(message):
             try:
                 await message.add_reaction(settings["emoji"])
             except discord.Forbidden:
-                # Bot cannot add reaction, skip
                 pass
     except Exception as e:
         await log_error(message.guild.id, f"on_message error: {e}")
@@ -286,16 +285,19 @@ async def channelselection(interaction: discord.Interaction):
         await interaction.response.send_message("❌ No channels available for selection.", ephemeral=True)
         return
 
-    options = [discord.SelectOption(label=c.name, value=str(c.id)) for c in channels]
     settings = await get_guild_settings(guild.id)
     current_channels = settings.get("channels", [])
+
+    options = [discord.SelectOption(label=c.name, value=str(c.id)) for c in channels]
+    for opt in options:
+        if int(opt.value) in current_channels:
+            opt.default = True  # Set default per option for 2.4.0 compatibility
 
     select = discord.ui.Select(
         placeholder="Select channels for translation",
         options=options,
         min_values=0,
-        max_values=len(options),
-        default=[str(c) for c in current_channels if str(c) in [o.value for o in options]]
+        max_values=len(options)
     )
 
     async def callback(inner: discord.Interaction):
