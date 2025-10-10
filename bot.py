@@ -48,6 +48,7 @@ async def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = await aiosqlite.connect(DB_PATH)
     await conn.execute("PRAGMA journal_mode=WAL;")
+    # Create table
     await conn.execute(f"""
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id INTEGER PRIMARY KEY,
@@ -55,7 +56,8 @@ async def init_db():
             emoji TEXT DEFAULT '🔃',
             rate_count INTEGER DEFAULT {DEFAULT_RATE_COUNT},
             rate_seconds INTEGER DEFAULT {DEFAULT_RATE_SECONDS},
-            error_channel INTEGER
+            error_channel INTEGER,
+            default_lang TEXT
         )
     """)
     await conn.commit()
@@ -64,32 +66,37 @@ async def init_db():
 
 async def get_guild_settings(guild_id: int) -> dict:
     conn = await aiosqlite.connect(DB_PATH)
-    row = await conn.execute_fetchone(
-        "SELECT channels, emoji, rate_count, rate_seconds, error_channel FROM guild_settings WHERE guild_id = ?",
+    cursor = await conn.execute(
+        "SELECT channels, emoji, rate_count, rate_seconds, error_channel, default_lang FROM guild_settings WHERE guild_id = ?",
         (guild_id,)
     )
+    row = await cursor.fetchone()
+    await cursor.close()
     await conn.close()
     if row:
-        channels_str, emoji, rate_count, rate_seconds, error_channel = row
+        channels_str, emoji, rate_count, rate_seconds, error_channel, default_lang = row
         channels = [int(c) for c in channels_str.split(",")] if channels_str else []
         return {
             "channels": channels,
             "emoji": emoji or "🔃",
             "rate_count": rate_count or DEFAULT_RATE_COUNT,
             "rate_seconds": rate_seconds or DEFAULT_RATE_SECONDS,
-            "error_channel": error_channel
+            "error_channel": error_channel,
+            "default_lang": default_lang
         }
     return {
         "channels": [],
         "emoji": "🔃",
         "rate_count": DEFAULT_RATE_COUNT,
         "rate_seconds": DEFAULT_RATE_SECONDS,
-        "error_channel": None
+        "error_channel": None,
+        "default_lang": None
     }
 
 async def set_guild_settings(guild_id: int, channels: Optional[List[int]] = None,
                              emoji: Optional[str] = None, rate_count: Optional[int] = None,
-                             rate_seconds: Optional[int] = None, error_channel: Optional[int] = None):
+                             rate_seconds: Optional[int] = None, error_channel: Optional[int] = None,
+                             default_lang: Optional[str] = None):
     conn = await aiosqlite.connect(DB_PATH)
     await conn.execute("INSERT OR IGNORE INTO guild_settings (guild_id) VALUES (?)", (guild_id,))
     if channels is not None:
@@ -103,6 +110,8 @@ async def set_guild_settings(guild_id: int, channels: Optional[List[int]] = None
         await conn.execute("UPDATE guild_settings SET rate_seconds = ? WHERE guild_id = ?", (rate_seconds, guild_id))
     if error_channel is not None:
         await conn.execute("UPDATE guild_settings SET error_channel = ? WHERE guild_id = ?", (error_channel, guild_id))
+    if default_lang is not None:
+        await conn.execute("UPDATE guild_settings SET default_lang = ? WHERE guild_id = ?", (default_lang, guild_id))
     await conn.commit()
     await conn.close()
 
@@ -194,16 +203,23 @@ async def on_reaction_add(reaction, user):
             return
 
         await reaction.remove(user)
-        await user.send("🌐 Reply with a language code (e.g., en, fr):")
-        def check(m): return m.author == user and isinstance(m.channel, discord.DMChannel)
-        reply = await bot.wait_for("message", check=check, timeout=60)
-        lang = reply.content.strip().lower()
-        if lang not in SUPPORTED_LANGS:
-            await user.send("❌ Invalid language code.")
-            return
+
+        # Use default language if set
+        default_lang = settings.get("default_lang")
+        lang = default_lang
+        if not lang:
+            await user.send("🌐 Reply with a language code (e.g., en, fr):")
+            def check(m): return m.author == user and isinstance(m.channel, discord.DMChannel)
+            reply = await bot.wait_for("message", check=check, timeout=60)
+            lang = reply.content.strip().lower()
+            if lang not in SUPPORTED_LANGS:
+                await user.send("❌ Invalid language code.")
+                return
+
         translated, detected = await translate_text(reaction.message.content, lang)
         msg = f"✅ **Translated ({lang})**\nDetected: `{detected}`\n\n{translated}" if detected else f"✅ **Translated ({lang})**\n\n{translated}"
         await user.send(msg)
+
     except Exception as e:
         await log_error(reaction.message.guild.id, f"on_reaction_add error: {e}")
 
@@ -256,6 +272,16 @@ async def seterrorchannel(interaction: discord.Interaction, channel: discord.Tex
     await set_guild_settings(interaction.guild.id, error_channel=channel.id)
     await interaction.response.send_message(f"✅ Error logging channel set to <#{channel.id}>", ephemeral=True)
 
+@bot.tree.command(name="setlang", description="Set default translation language for this server")
+@app_commands.checks.has_permissions(administrator=True)
+async def setlang(interaction: discord.Interaction, lang: str):
+    lang = lang.lower()
+    if lang not in SUPPORTED_LANGS:
+        await interaction.response.send_message("❌ Invalid language code.", ephemeral=True)
+        return
+    await set_guild_settings(interaction.guild.id, default_lang=lang)
+    await interaction.response.send_message(f"✅ Default translation language set to `{lang}`", ephemeral=True)
+
 @bot.tree.command(name="help", description="Show bot commands")
 async def help_command(interaction: discord.Interaction):
     help_text = (
@@ -263,6 +289,7 @@ async def help_command(interaction: discord.Interaction):
         "/addchannel - Add a channel for translation reactions\n"
         "/setemoji - Set reaction emoji\n"
         "/seterrorchannel - Set error logging channel\n"
+        "/setlang - Set default translation language\n"
         "/help - Show this help message\n"
         "React with the emoji in a translation channel to translate a message privately.\n"
         "Uses Google Translate first, then public LibreTranslate as fallback."
