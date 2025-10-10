@@ -48,7 +48,6 @@ async def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = await aiosqlite.connect(DB_PATH)
     await conn.execute("PRAGMA journal_mode=WAL;")
-    # Create tables
     await conn.execute(f"""
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id INTEGER PRIMARY KEY,
@@ -254,8 +253,19 @@ async def on_reaction_add(reaction, user):
                 return
 
         translated, detected = await translate_text(reaction.message.content, lang)
-        msg = f"✅ **Translated ({lang})**\nDetected: `{detected}`\n\n{translated}" if detected else f"✅ **Translated ({lang})**\n\n{translated}"
-        await user.send(msg)
+
+        # Send embed with original author info
+        embed = discord.Embed(
+            title="Original Message",
+            description=reaction.message.content,
+            color=discord.Color(int("de002a", 16))
+        )
+        embed.set_author(name=reaction.message.author.display_name, icon_url=reaction.message.author.avatar.url)
+        await user.send(embed=embed)
+
+        # Send translation as normal text
+        msg_text = f"✅ **Translated ({lang})**\nDetected: `{detected}`\n\n{translated}" if detected else f"✅ **Translated ({lang})**\n\n{translated}"
+        await user.send(msg_text)
 
     except Exception as e:
         await log_error(reaction.message.guild.id, f"on_reaction_add error: {e}")
@@ -291,7 +301,7 @@ async def channelselection(interaction: discord.Interaction):
     options = [discord.SelectOption(label=c.name, value=str(c.id)) for c in channels]
     for opt in options:
         if int(opt.value) in current_channels:
-            opt.default = True  # Set default per option for 2.4.0 compatibility
+            opt.default = True
 
     select = discord.ui.Select(
         placeholder="Select channels for translation",
@@ -346,22 +356,21 @@ async def setmylang(interaction: discord.Interaction, lang: str):
 
 @bot.tree.command(name="help", description="Show bot commands available to you")
 async def help_command(interaction: discord.Interaction):
-    """Show help menu only with commands the user can run"""
-    help_lines = ["**Translator Bot Commands:**"]
-    help_lines.append("React with the emoji in a translation channel to translate a message privately.")
+    embed = discord.Embed(title="Translator Bot Commands", color=discord.Color(int("de002a",16)))
 
-    # Show only commands the user can actually run
+    # Info about reaction translation
+    embed.add_field(name="React with 🔃", value="React to a message in a translation channel to translate it privately.", inline=False)
+
+    # Determine if user is admin
+    perms = interaction.user.guild_permissions
+    is_admin = perms.administrator
+
     for cmd in bot.tree.walk_commands():
-        if isinstance(cmd, app_commands.Command):
-            checks = getattr(cmd.callback, "_app_command_checks", [])
-            is_admin_only = any(
-                isinstance(c, app_commands.checks.HasPermissions) and getattr(c, "permissions", None)
-                for c in checks
-            )
-            if not is_admin_only:
-                help_lines.append(f"/{cmd.name} - {cmd.description}")
+        if isinstance(cmd, app_commands.Command) and cmd.name != "help":
+            if is_admin or not any(isinstance(c, app_commands.checks.HasPermissions) for c in getattr(cmd.callback, "_app_command_checks", [])):
+                embed.add_field(name=f"/{cmd.name}", value=cmd.description, inline=False)
 
-    await interaction.response.send_message("\n".join(help_lines), ephemeral=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ---------- Run ----------
 if __name__ == "__main__":
