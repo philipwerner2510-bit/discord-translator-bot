@@ -48,7 +48,7 @@ async def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = await aiosqlite.connect(DB_PATH)
     await conn.execute("PRAGMA journal_mode=WAL;")
-    # Create table
+    # Create tables
     await conn.execute(f"""
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id INTEGER PRIMARY KEY,
@@ -58,6 +58,14 @@ async def init_db():
             rate_seconds INTEGER DEFAULT {DEFAULT_RATE_SECONDS},
             error_channel INTEGER,
             default_lang TEXT
+        )
+    """)
+    await conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS user_settings (
+            guild_id INTEGER,
+            user_id INTEGER,
+            default_lang TEXT,
+            PRIMARY KEY (guild_id, user_id)
         )
     """)
     await conn.commit()
@@ -112,6 +120,26 @@ async def set_guild_settings(guild_id: int, channels: Optional[List[int]] = None
         await conn.execute("UPDATE guild_settings SET error_channel = ? WHERE guild_id = ?", (error_channel, guild_id))
     if default_lang is not None:
         await conn.execute("UPDATE guild_settings SET default_lang = ? WHERE guild_id = ?", (default_lang, guild_id))
+    await conn.commit()
+    await conn.close()
+
+async def get_user_settings(guild_id: int, user_id: int) -> dict:
+    conn = await aiosqlite.connect(DB_PATH)
+    cursor = await conn.execute(
+        "SELECT default_lang FROM user_settings WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id)
+    )
+    row = await cursor.fetchone()
+    await cursor.close()
+    await conn.close()
+    return {"default_lang": row[0]} if row else {}
+
+async def set_user_settings(guild_id: int, user_id: int, default_lang: str):
+    conn = await aiosqlite.connect(DB_PATH)
+    await conn.execute(
+        "INSERT OR REPLACE INTO user_settings (guild_id, user_id, default_lang) VALUES (?, ?, ?)",
+        (guild_id, user_id, default_lang)
+    )
     await conn.commit()
     await conn.close()
 
@@ -181,7 +209,11 @@ async def on_message(message):
     try:
         settings = await get_guild_settings(message.guild.id)
         if message.channel.id in settings["channels"]:
-            await message.add_reaction(settings["emoji"])
+            try:
+                await message.add_reaction(settings["emoji"])
+            except discord.Forbidden:
+                # Bot cannot add reaction, skip
+                pass
     except Exception as e:
         await log_error(message.guild.id, f"on_message error: {e}")
     await bot.process_commands(message)
@@ -198,15 +230,21 @@ async def on_reaction_add(reaction, user):
             return
 
         if is_rate_limited(reaction.message.guild.id, user.id, settings["rate_count"], settings["rate_seconds"]):
-            await reaction.remove(user)
+            try:
+                await reaction.remove(user)
+            except discord.Forbidden:
+                pass
             await user.send(f"🚫 Rate limit reached ({settings['rate_count']}/{settings['rate_seconds']}s).")
             return
 
-        await reaction.remove(user)
+        try:
+            await reaction.remove(user)
+        except discord.Forbidden:
+            pass
 
-        # Use default language if set
-        default_lang = settings.get("default_lang")
-        lang = default_lang
+        # Check user-specific language first
+        user_settings = await get_user_settings(reaction.message.guild.id, user.id)
+        lang = user_settings.get("default_lang") or settings.get("default_lang")
         if not lang:
             await user.send("🌐 Reply with a language code (e.g., en, fr):")
             def check(m): return m.author == user and isinstance(m.channel, discord.DMChannel)
@@ -238,27 +276,40 @@ async def log_error(guild_id: int, msg: str):
             logger.error(f"Failed to send error log: {e}")
 
 # ---------- Slash commands ----------
-@bot.tree.command(name="addchannel", description="Add a channel for translation reactions")
+@bot.tree.command(name="channelselection", description="Select multiple channels for translation reactions")
 @app_commands.checks.has_permissions(administrator=True)
-async def addchannel(interaction: discord.Interaction):
+async def channelselection(interaction: discord.Interaction):
     guild = interaction.guild
     channels = [c for c in guild.text_channels if c.permissions_for(guild.me).send_messages]
-    options = [discord.SelectOption(label=c.name, value=str(c.id)) for c in channels[:25]]
-    select = discord.ui.Select(placeholder="Select channel to add", options=options)
+
+    if not channels:
+        await interaction.response.send_message("❌ No channels available for selection.", ephemeral=True)
+        return
+
+    options = [discord.SelectOption(label=c.name, value=str(c.id)) for c in channels]
+    settings = await get_guild_settings(guild.id)
+    current_channels = settings.get("channels", [])
+
+    select = discord.ui.Select(
+        placeholder="Select channels for translation",
+        options=options,
+        min_values=0,
+        max_values=len(options),
+        default=[str(c) for c in current_channels if str(c) in [o.value for o in options]]
+    )
 
     async def callback(inner: discord.Interaction):
-        cid = int(select.values[0])
-        settings = await get_guild_settings(guild.id)
-        channels_list = settings["channels"]
-        if cid not in channels_list:
-            channels_list.append(cid)
-        await set_guild_settings(guild.id, channels=channels_list)
-        await inner.response.send_message(f"✅ Channel <#{cid}> added for translations.", ephemeral=True)
+        selected_ids = [int(v) for v in select.values]
+        await set_guild_settings(guild.id, channels=selected_ids)
+        await inner.response.send_message(
+            f"✅ Channels updated for translations: {', '.join(f'<#{c}>' for c in selected_ids) or 'None'}",
+            ephemeral=True
+        )
 
     select.callback = callback
     view = discord.ui.View()
     view.add_item(select)
-    await interaction.response.send_message("Select a channel:", view=view, ephemeral=True)
+    await interaction.response.send_message("Select channels for translation reactions:", view=view, ephemeral=True)
 
 @bot.tree.command(name="setemoji", description="Set the reaction emoji")
 @app_commands.checks.has_permissions(administrator=True)
@@ -282,19 +333,33 @@ async def setlang(interaction: discord.Interaction, lang: str):
     await set_guild_settings(interaction.guild.id, default_lang=lang)
     await interaction.response.send_message(f"✅ Default translation language set to `{lang}`", ephemeral=True)
 
-@bot.tree.command(name="help", description="Show bot commands")
+@bot.tree.command(name="setmylang", description="Set your personal default translation language")
+async def setmylang(interaction: discord.Interaction, lang: str):
+    lang = lang.lower()
+    if lang not in SUPPORTED_LANGS:
+        await interaction.response.send_message("❌ Invalid language code.", ephemeral=True)
+        return
+    await set_user_settings(interaction.guild.id, interaction.user.id, lang)
+    await interaction.response.send_message(f"✅ Your default translation language is now `{lang}`", ephemeral=True)
+
+@bot.tree.command(name="help", description="Show bot commands available to you")
 async def help_command(interaction: discord.Interaction):
-    help_text = (
-        "**Translator Bot Commands:**\n"
-        "/addchannel - Add a channel for translation reactions\n"
-        "/setemoji - Set reaction emoji\n"
-        "/seterrorchannel - Set error logging channel\n"
-        "/setlang - Set default translation language\n"
-        "/help - Show this help message\n"
-        "React with the emoji in a translation channel to translate a message privately.\n"
-        "Uses Google Translate first, then public LibreTranslate as fallback."
-    )
-    await interaction.response.send_message(help_text, ephemeral=True)
+    """Show help menu only with commands the user can run"""
+    help_lines = ["**Translator Bot Commands:**"]
+    help_lines.append("React with the emoji in a translation channel to translate a message privately.")
+
+    # Show only commands the user can actually run
+    for cmd in bot.tree.walk_commands():
+        if isinstance(cmd, app_commands.Command):
+            checks = getattr(cmd.callback, "_app_command_checks", [])
+            is_admin_only = any(
+                isinstance(c, app_commands.checks.HasPermissions) and getattr(c, "permissions", None)
+                for c in checks
+            )
+            if not is_admin_only:
+                help_lines.append(f"/{cmd.name} - {cmd.description}")
+
+    await interaction.response.send_message("\n".join(help_lines), ephemeral=True)
 
 # ---------- Run ----------
 if __name__ == "__main__":
