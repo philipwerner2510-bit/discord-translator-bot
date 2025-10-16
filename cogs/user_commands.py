@@ -25,6 +25,8 @@ class UserCommands(commands.Cog):
     @app_commands.command(name="help", description="Show help for available commands.")
     async def help(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
+        guild_id = interaction.guild.id if interaction.guild else None
+        current_emote = await database.get_guild_emote(guild_id) if guild_id else "🔃"
 
         embed = discord.Embed(
             title="📖 Demon Translator Help",
@@ -32,12 +34,11 @@ class UserCommands(commands.Cog):
             color=0xde002a
         )
 
-        # -----------------------
-        # Commands visible to everyone
-        # -----------------------
+        # Commands for all users
         embed.add_field(
             name="/setmylang `<lang>`",
-            value="Set your personal translation language (e.g. `en`, `de`, `fr`).\nThis overrides the server default language.",
+            value="Set your personal translation language (e.g. `en`, `de`, `fr`).\n"
+                  "This overrides the server default language.",
             inline=False
         )
 
@@ -47,9 +48,7 @@ class UserCommands(commands.Cog):
             inline=False
         )
 
-        # -----------------------
-        # Admin commands
-        # -----------------------
+        # Admin-only commands
         if is_admin:
             embed.add_field(
                 name="🛠️ Admin Commands",
@@ -72,8 +71,8 @@ class UserCommands(commands.Cog):
                 inline=False
             )
             embed.add_field(
-                name="/emote `<emoji>`",
-                value="Set a custom reaction emote for translation messages.",
+                name="/emote `<emote>`",
+                value=f"Set the bot's reaction emote for translation channels.\nCurrent emote: {current_emote}",
                 inline=False
             )
 
