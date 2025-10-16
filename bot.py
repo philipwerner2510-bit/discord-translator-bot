@@ -2,6 +2,7 @@ import os
 import asyncio
 import discord
 from discord.ext import commands
+from utils import database
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -13,11 +14,14 @@ intents.dm_messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -----------------------------
-# Load all cogs async
+# Async main: init DB + load cogs
 # -----------------------------
 async def main():
+    # Initialize database tables
+    await database.init_db()
+
     async with bot:
-        for ext in ["cogs.user_commands", "cogs.admin_commands", "cogs.translate"]:
+        for ext in ["cogs.user_commands", "cogs.admin_commands", "cogs.translate", "cogs.events"]:
             try:
                 await bot.load_extension(ext)
                 print(f"✅ Loaded {ext}")
@@ -26,7 +30,7 @@ async def main():
         await bot.start(os.environ["BOT_TOKEN"])
 
 # -----------------------------
-# Sync all slash commands on ready
+# Sync slash commands on ready
 # -----------------------------
 @bot.event
 async def on_ready():
