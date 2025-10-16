@@ -28,10 +28,7 @@ class AdminCommands(commands.Cog):
             await interaction.followup.send("❌ No channels available to select.", ephemeral=True)
             return
 
-        options = [
-            discord.SelectOption(label=c.name, value=str(c.id))
-            for c in channels[:25]
-        ]
+        options = [discord.SelectOption(label=c.name, value=str(c.id)) for c in channels[:25]]
 
         select = discord.ui.Select(
             placeholder="Select translation channels",
