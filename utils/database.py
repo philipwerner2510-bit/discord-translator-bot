@@ -115,7 +115,7 @@ async def get_error_channel(guild_id: int):
             return row[0] if row else None
 
 # -----------------------
-# Bot emote (new)
+# Bot emote
 # -----------------------
 async def set_bot_emote(guild_id: int, emote: str):
     async with aiosqlite.connect(DB_PATH) as db:
