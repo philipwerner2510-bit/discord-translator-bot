@@ -6,7 +6,11 @@ from utils import database
 class AdminCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.bot_emote = "🔃"  # Default emote
 
+    # -----------------------
+    # Set server default language
+    # -----------------------
     @app_commands.command(name="defaultlang", description="Set server default translation language")
     @app_commands.checks.has_permissions(administrator=True)
     async def defaultlang(self, interaction: discord.Interaction, lang: str):
@@ -15,8 +19,14 @@ class AdminCommands(commands.Cog):
             await database.set_server_lang(interaction.guild.id, lang.lower())
             await interaction.followup.send(f"✅ Server default language set to `{lang}`", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+            if interaction.response.is_done():
+                await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
+    # -----------------------
+    # Set translation channels
+    # -----------------------
     @app_commands.command(name="channelselection", description="Select channels for translation reactions")
     @app_commands.checks.has_permissions(administrator=True)
     async def channelselection(self, interaction: discord.Interaction):
@@ -28,7 +38,10 @@ class AdminCommands(commands.Cog):
             await interaction.followup.send("❌ No channels available to select.", ephemeral=True)
             return
 
-        options = [discord.SelectOption(label=c.name, value=str(c.id)) for c in channels[:25]]
+        options = [
+            discord.SelectOption(label=c.name, value=str(c.id))
+            for c in channels[:25]
+        ]
 
         select = discord.ui.Select(
             placeholder="Select translation channels",
@@ -50,6 +63,9 @@ class AdminCommands(commands.Cog):
         view.add_item(select)
         await interaction.followup.send("Select translation channels:", view=view, ephemeral=True)
 
+    # -----------------------
+    # Set error logging channel
+    # -----------------------
     @app_commands.command(name="seterrorchannel", description="Set channel for error logging")
     @app_commands.checks.has_permissions(administrator=True)
     async def seterrorchannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
@@ -58,27 +74,39 @@ class AdminCommands(commands.Cog):
             await database.set_error_channel(interaction.guild.id, channel.id)
             await interaction.followup.send(f"✅ Error channel set to {channel.mention}", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+            if interaction.response.is_done():
+                await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="emote", description="Set the reaction emote for the bot")
+    # -----------------------
+    # Set server bot emote
+    # -----------------------
+    @app_commands.command(name="emote", description="Set the emote the bot uses for translation reactions")
     @app_commands.checks.has_permissions(administrator=True)
-    async def emote(self, interaction: discord.Interaction, emote: str):
+    async def emote(self, interaction: discord.Interaction, emoji: str):
         await interaction.response.defer(ephemeral=True)
-        try:
-            await database.set_custom_emote(interaction.guild.id, emote)
-            await interaction.followup.send(f"✅ Bot emote set to {emote}", ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+        self.bot_emote = emoji
+        await interaction.followup.send(f"✅ Bot emote set to {emoji}", ephemeral=True)
 
+    # -----------------------
+    # Error handler
+    # -----------------------
     @defaultlang.error
     @channelselection.error
     @seterrorchannel.error
     @emote.error
     async def admin_error(self, interaction, error):
         if isinstance(error, app_commands.errors.MissingPermissions):
-            await interaction.response.send_message("🚫 You need Administrator permissions.", ephemeral=True)
+            if interaction.response.is_done():
+                await interaction.followup.send("🚫 You need Administrator permissions.", ephemeral=True)
+            else:
+                await interaction.response.send_message("🚫 You need Administrator permissions.", ephemeral=True)
         else:
-            await interaction.response.send_message(f"❌ Error: {error}", ephemeral=True)
+            if interaction.response.is_done():
+                await interaction.followup.send(f"❌ Error: {error}", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"❌ Error: {error}", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(AdminCommands(bot))
