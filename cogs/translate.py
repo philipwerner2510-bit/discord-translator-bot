@@ -1,82 +1,70 @@
 import discord
 from discord.ext import commands
-from utils import database as db
-from googletrans import Translator
+from utils import database
+import httpx
 
 class TranslateCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.translator = Translator()
 
-    # -----------------------------
-    # Reaction listener for translation
-    # -----------------------------
     @commands.Cog.listener()
-    async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
-        if user.bot:
+    async def on_message(self, message):
+        if message.author.bot or not message.guild:
+            return
+
+        translation_channels = await database.get_translation_channels(message.guild.id)
+        if message.channel.id in translation_channels:
+            try:
+                await message.add_reaction("🔃")
+            except discord.Forbidden:
+                # Bot missing reaction perms
+                error_channel = await database.get_error_channel(message.guild.id)
+                if error_channel:
+                    ch = message.guild.get_channel(error_channel)
+                    if ch:
+                        await ch.send(f"❌ Missing permission to add reactions in {message.channel.mention}")
+    
+    @commands.Cog.listener()
+    async def on_reaction_add(self, reaction, user):
+        if user.bot or str(reaction.emoji) != "🔃":
             return
 
         message = reaction.message
-        guild_id = message.guild.id if message.guild else None
-        if not guild_id:
-            return  # Only in guilds
+        if not message.guild:
+            return
 
-        # Get channels enabled for translation in this guild
-        translation_channels = await db.get_translation_channels(guild_id)
+        translation_channels = await database.get_translation_channels(message.guild.id)
         if message.channel.id not in translation_channels:
             return
 
-        # Only trigger on 🔃
-        if str(reaction.emoji) != "🔃":
-            return
-
-        # Remove user reaction immediately
+        await reaction.remove(user)
         try:
-            await message.remove_reaction(reaction.emoji, user)
-        except discord.Forbidden:
-            pass  # Bot may not have permissions
+            await user.send("🌐 Reply with the language code (e.g., `en`, `fr`, `de`):")
+            def check(m):
+                return m.author == user and isinstance(m.channel, discord.DMChannel)
 
-        # Determine target language
-        user_lang = await db.get_user_lang(user.id)
-        if not user_lang:
-            # fallback to server default
-            user_lang = await db.get_server_lang(guild_id) or "en"
+            dm = await self.bot.wait_for("message", check=check, timeout=60)
+            lang = dm.content.strip().lower()
 
-        # Translate the message
-        try:
-            translated = await self.bot.loop.run_in_executor(
-                None, lambda: self.translator.translate(message.content, dest=user_lang)
-            )
-        except Exception as e:
-            # Log to error channel if set
-            error_channel_id = await db.get_error_channel(guild_id)
-            if error_channel_id:
-                channel = self.bot.get_channel(error_channel_id)
-                if channel:
-                    await channel.send(f"[Guild {guild_id}] on_reaction_add error: {e}")
-            return
+            async with httpx.AsyncClient() as client:
+                resp = await client.post("https://libretranslate.de/translate", json={
+                    "q": message.content,
+                    "source": "auto",
+                    "target": lang
+                })
+                data = resp.json()
+                translated_text = data.get("translatedText", "❌ Translation failed")
 
-        # Send DM to user
-        try:
             embed = discord.Embed(
-                title=f"Translation from {message.author.display_name}",
-                description=translated.text,
+                description=translated_text,
                 color=0xDE002A
             )
-            embed.set_thumbnail(url=message.author.display_avatar.url)
-            embed.set_footer(text=f"Detected: {translated.src} | Translated to: {translated.dest}")
+            embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
+            embed.set_footer(text=f"Translated from auto-detected language → {lang}")
+            await user.send(content=translated_text, embed=embed)
 
-            await user.send(embed=embed)
-        except discord.Forbidden:
-            # User has DMs closed
-            pass
-
-    # -----------------------------
-    # Optional helper function for manual translation
-    # -----------------------------
-    async def translate_text(self, text: str, dest: str) -> str:
-        return (await self.bot.loop.run_in_executor(None, lambda: self.translator.translate(text, dest=dest))).text
-
+        except Exception as e:
+            await user.send(f"❌ Translation error: {e}")
 
 async def setup(bot):
     await bot.add_cog(TranslateCog(bot))
