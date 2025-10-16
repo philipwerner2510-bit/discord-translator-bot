@@ -1,70 +1,49 @@
+import os
+import asyncio
 import discord
 from discord.ext import commands
 from utils import database
-import httpx
 
-class TranslateCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
+intents = discord.Intents.default()
+intents.message_content = True
+intents.messages = True
+intents.reactions = True
+intents.guilds = True
+intents.dm_messages = True
 
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.author.bot or not message.guild:
-            return
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-        translation_channels = await database.get_translation_channels(message.guild.id)
-        if message.channel.id in translation_channels:
+# -----------------------------
+# Sync commands after cogs
+# -----------------------------
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"✅ Logged in as {bot.user}")
+
+# -----------------------------
+# Test command
+# -----------------------------
+@bot.tree.command(name="test", description="Test if interactions work")
+async def test(interaction: discord.Interaction):
+    await interaction.response.send_message("✅ Test command works!", ephemeral=True)
+
+# -----------------------------
+# Main async loader
+# -----------------------------
+async def main():
+    # Initialize database first
+    await database.init_db()
+
+    async with bot:
+        for ext in ["cogs.user_commands", "cogs.admin_commands", "cogs.translate"]:
             try:
-                await message.add_reaction("🔃")
-            except discord.Forbidden:
-                # Bot missing reaction perms
-                error_channel = await database.get_error_channel(message.guild.id)
-                if error_channel:
-                    ch = message.guild.get_channel(error_channel)
-                    if ch:
-                        await ch.send(f"❌ Missing permission to add reactions in {message.channel.mention}")
-    
-    @commands.Cog.listener()
-    async def on_reaction_add(self, reaction, user):
-        if user.bot or str(reaction.emoji) != "🔃":
-            return
+                await bot.load_extension(ext)
+                print(f"✅ Loaded {ext}")
+            except Exception as e:
+                print(f"❌ Failed to load {ext}: {e}")
 
-        message = reaction.message
-        if not message.guild:
-            return
+        await bot.start(os.environ["BOT_TOKEN"])
 
-        translation_channels = await database.get_translation_channels(message.guild.id)
-        if message.channel.id not in translation_channels:
-            return
-
-        await reaction.remove(user)
-        try:
-            await user.send("🌐 Reply with the language code (e.g., `en`, `fr`, `de`):")
-            def check(m):
-                return m.author == user and isinstance(m.channel, discord.DMChannel)
-
-            dm = await self.bot.wait_for("message", check=check, timeout=60)
-            lang = dm.content.strip().lower()
-
-            async with httpx.AsyncClient() as client:
-                resp = await client.post("https://libretranslate.de/translate", json={
-                    "q": message.content,
-                    "source": "auto",
-                    "target": lang
-                })
-                data = resp.json()
-                translated_text = data.get("translatedText", "❌ Translation failed")
-
-            embed = discord.Embed(
-                description=translated_text,
-                color=0xDE002A
-            )
-            embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
-            embed.set_footer(text=f"Translated from auto-detected language → {lang}")
-            await user.send(content=translated_text, embed=embed)
-
-        except Exception as e:
-            await user.send(f"❌ Translation error: {e}")
-
-async def setup(bot):
-    await bot.add_cog(TranslateCog(bot))
+if __name__ == "__main__":
+    asyncio.run(main()) 
