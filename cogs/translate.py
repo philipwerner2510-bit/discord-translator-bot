@@ -4,8 +4,8 @@ from discord import app_commands
 from utils import database
 import aiohttp
 
-# Update this to a more reliable LibreTranslate endpoint or self-hosted URL
-LIBRE_URL = "https://libretranslate.com/translate"
+# Correct LibreTranslate public instance
+LIBRE_URL = "https://libretranslate.com/translate"  # POST API endpoint
 
 class Translate(commands.Cog):
     def __init__(self, bot):
@@ -16,18 +16,14 @@ class Translate(commands.Cog):
     # -----------------------
     @app_commands.command(name="translate", description="Translate a specific text manually.")
     async def translate(self, interaction: discord.Interaction, text: str, target_lang: str):
-        try:
-            await interaction.response.defer(ephemeral=True)
-        except discord.errors.HTTPException:
-            # Already deferred/acknowledged
-            pass
-
+        await interaction.response.defer(ephemeral=True)
         try:
             translated_text, detected = await self.translate_text(text, target_lang)
             embed = discord.Embed(
                 title="🌐 Translation",
                 color=0xde002a
             )
+            embed.add_field(name="Original Text", value=text, inline=False)
             embed.add_field(name="Translated Text", value=translated_text, inline=False)
             embed.set_footer(text=f"Detected language: {detected} | Translated to: {target_lang}")
             await interaction.followup.send(embed=embed, ephemeral=True)
@@ -41,7 +37,6 @@ class Translate(commands.Cog):
     async def on_reaction_add(self, reaction, user):
         if user.bot:
             return
-
         message = reaction.message
         guild_id = message.guild.id if message.guild else None
         if not guild_id:
@@ -52,35 +47,28 @@ class Translate(commands.Cog):
 
         if channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == bot_emote:
             try:
+                # Determine target language
                 user_lang = await database.get_user_lang(user.id)
                 target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
 
+                # Translate
                 translated_text, detected = await self.translate_text(message.content, target_lang)
 
+                # Embed with author info
                 embed = discord.Embed(color=0xde002a)
                 embed.set_author(
                     name=message.author.display_name,
                     icon_url=message.author.display_avatar.url
                 )
+                embed.add_field(name="Original Text", value=message.content, inline=False)
                 embed.add_field(name="Translated Text", value=translated_text, inline=False)
-                embed.set_footer(text=f"From: {message.content[:50]}... | Language: {target_lang}")
+                embed.set_footer(text=f"Detected language: {detected} | Translated to: {target_lang}")
 
-                try:
-                    await user.send(embed=embed)
-                except discord.Forbidden:
-                    # User DMs closed
-                    error_channel_id = await database.get_error_channel(guild_id)
-                    if error_channel_id:
-                        ch = message.guild.get_channel(error_channel_id)
-                        if ch:
-                            await ch.send(f"❌ Could not DM user {user.mention} for translation.")
+                # DM the user
+                await user.send(embed=embed)
 
-                # Remove reaction after translation
-                try:
-                    await reaction.remove(user)
-                except discord.Forbidden:
-                    print(f"Cannot remove reaction in #{message.channel.name}")
-
+                # Remove reaction
+                await reaction.remove(user)
             except Exception as e:
                 error_channel_id = await database.get_error_channel(guild_id)
                 if error_channel_id:
@@ -94,20 +82,21 @@ class Translate(commands.Cog):
     # Helper: Translate text via LibreTranslate
     # -----------------------
     async def translate_text(self, text: str, target_lang: str):
-        async with aiohttp.ClientSession() as session:
-            headers = {"Content-Type": "application/json"}
-            payload = {"q": text, "source": "auto", "target": target_lang}
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "q": text,
+            "source": "auto",
+            "target": target_lang
+        }
 
+        async with aiohttp.ClientSession() as session:
             async with session.post(LIBRE_URL, json=payload, headers=headers) as resp:
                 if resp.status != 200:
                     raise Exception(f"Translation API returned status {resp.status}")
-                try:
-                    data = await resp.json()
-                except Exception:
-                    text = await resp.text()
-                    raise Exception(f"Failed to parse translation response. Raw: {text[:200]}...")
-
-                return data["translatedText"], data.get("detectedLanguage", "unknown")
+                data = await resp.json(content_type=None)  # Ignore content-type errors
+                translated_text = data.get("translatedText")
+                detected = data.get("detectedLanguage", "unknown")
+                return translated_text, detected
 
 async def setup(bot):
     await bot.add_cog(Translate(bot))
