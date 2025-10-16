@@ -2,56 +2,26 @@ import aiosqlite
 
 DB_PATH = "bot_data.db"
 
-# -----------------------
-# Initialize all tables
-# -----------------------
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # User languages
         await db.execute("""
-        CREATE TABLE IF NOT EXISTS user_lang(
-            user_id INTEGER PRIMARY KEY,
-            lang TEXT
-        )
+        CREATE TABLE IF NOT EXISTS user_lang(user_id INTEGER PRIMARY KEY, lang TEXT)
         """)
-
-        # Server default language
         await db.execute("""
-        CREATE TABLE IF NOT EXISTS server_lang(
-            guild_id INTEGER PRIMARY KEY,
-            lang TEXT
-        )
+        CREATE TABLE IF NOT EXISTS server_lang(guild_id INTEGER PRIMARY KEY, lang TEXT)
         """)
-
-        # Translation channels per server
         await db.execute("""
-        CREATE TABLE IF NOT EXISTS translation_channels(
-            guild_id INTEGER PRIMARY KEY,
-            channels TEXT
-        )
+        CREATE TABLE IF NOT EXISTS translation_channels(guild_id INTEGER PRIMARY KEY, channels TEXT)
         """)
-
-        # Error logging channel
         await db.execute("""
-        CREATE TABLE IF NOT EXISTS error_channel(
-            guild_id INTEGER PRIMARY KEY,
-            channel_id INTEGER
-        )
+        CREATE TABLE IF NOT EXISTS error_channel(guild_id INTEGER PRIMARY KEY, channel_id INTEGER)
         """)
-
-        # Reaction emotes per server
         await db.execute("""
-        CREATE TABLE IF NOT EXISTS reaction_emotes(
-            guild_id INTEGER PRIMARY KEY,
-            emotes TEXT
-        )
+        CREATE TABLE IF NOT EXISTS custom_emote(guild_id INTEGER PRIMARY KEY, emote TEXT)
         """)
-
         await db.commit()
 
-# -----------------------
-# User language
-# -----------------------
+# --- User ---
 async def set_user_lang(user_id: int, lang: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -67,9 +37,7 @@ async def get_user_lang(user_id: int):
             row = await cursor.fetchone()
             return row[0] if row else None
 
-# -----------------------
-# Server language
-# -----------------------
+# --- Server ---
 async def set_server_lang(guild_id: int, lang: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -85,9 +53,7 @@ async def get_server_lang(guild_id: int):
             row = await cursor.fetchone()
             return row[0] if row else None
 
-# -----------------------
-# Translation channels
-# -----------------------
+# --- Translation channels ---
 async def set_translation_channels(guild_id: int, channels: list):
     channels_str = ",".join(map(str, channels))
     async with aiosqlite.connect(DB_PATH) as db:
@@ -102,13 +68,11 @@ async def get_translation_channels(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT channels FROM translation_channels WHERE guild_id=?", (guild_id,)) as cursor:
             row = await cursor.fetchone()
-            if row and row[0]:
+            if row:
                 return [int(x) for x in row[0].split(",") if x]
             return []
 
-# -----------------------
-# Error logging channel
-# -----------------------
+# --- Error channel ---
 async def set_error_channel(guild_id: int, channel_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -124,23 +88,18 @@ async def get_error_channel(guild_id: int):
             row = await cursor.fetchone()
             return row[0] if row else None
 
-# -----------------------
-# Reaction emotes
-# -----------------------
-async def set_reaction_emotes(guild_id: int, emotes: list):
-    emotes_str = ",".join(emotes)
+# --- Custom Emote ---
+async def set_custom_emote(guild_id: int, emote: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-        INSERT INTO reaction_emotes(guild_id, emotes)
+        INSERT INTO custom_emote(guild_id, emote)
         VALUES (?, ?)
-        ON CONFLICT(guild_id) DO UPDATE SET emotes=excluded.emotes
-        """, (guild_id, emotes_str))
+        ON CONFLICT(guild_id) DO UPDATE SET emote=excluded.emote
+        """, (guild_id, emote))
         await db.commit()
 
-async def get_reaction_emotes(guild_id: int):
+async def get_custom_emote(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT emotes FROM reaction_emotes WHERE guild_id=?", (guild_id,)) as cursor:
+        async with db.execute("SELECT emote FROM custom_emote WHERE guild_id=?", (guild_id,)) as cursor:
             row = await cursor.fetchone()
-            if row and row[0]:
-                return [x for x in row[0].split(",") if x]
-            return []
+            return row[0] if row else "🔃"
