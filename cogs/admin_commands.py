@@ -6,7 +6,6 @@ from utils import database
 class AdminCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.bot_emote = "🔃"  # Default emote
 
     # -----------------------
     # Set server default language
@@ -25,7 +24,7 @@ class AdminCommands(commands.Cog):
                 await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
     # -----------------------
-    # Set translation channels
+    # Select translation channels
     # -----------------------
     @app_commands.command(name="channelselection", description="Select channels for translation reactions")
     @app_commands.checks.has_permissions(administrator=True)
@@ -86,8 +85,14 @@ class AdminCommands(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     async def emote(self, interaction: discord.Interaction, emoji: str):
         await interaction.response.defer(ephemeral=True)
-        self.bot_emote = emoji
-        await interaction.followup.send(f"✅ Bot emote set to {emoji}", ephemeral=True)
+        try:
+            await database.set_bot_emote(interaction.guild.id, emoji)
+            await interaction.followup.send(f"✅ Bot emote set to {emoji}", ephemeral=True)
+        except Exception as e:
+            if interaction.response.is_done():
+                await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
     # -----------------------
     # Error handler
