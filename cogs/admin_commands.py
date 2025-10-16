@@ -10,23 +10,38 @@ class AdminCommands(commands.Cog):
     # -----------------------
     # Set server default language
     # -----------------------
-    @app_commands.command(name="defaultlang", description="Set default translation language for the server.")
+    @app_commands.command(name="defaultlang", description="Set the default translation language for this server.")
     async def defaultlang(self, interaction: discord.Interaction, lang: str):
         try:
-            await database.set_server_lang(interaction.guild.id, lang.lower())
-            await interaction.response.send_message(f"✅ Server default language set to `{lang}`", ephemeral=True)
+            await interaction.response.defer(ephemeral=True)
+        except discord.HTTPException:
+            pass  # Interaction already acknowledged
+
+        try:
+            guild_id = interaction.guild.id if interaction.guild else None
+            if guild_id is None:
+                await interaction.followup.send("❌ Cannot set default language outside a server.", ephemeral=True)
+                return
+            await database.set_server_lang(guild_id, lang.lower())
+            await interaction.followup.send(f"✅ Server default language set to `{lang}`.", ephemeral=True)
         except Exception as e:
-            await self.admin_error(interaction, e)
+            await self.safe_error(interaction, e)
 
     # -----------------------
-    # Multi-select channel selection
+    # Set translation channels with multiple-choice menu
     # -----------------------
-    @app_commands.command(name="channelselection", description="Select channels where the bot reacts for translations.")
+    @app_commands.command(name="channelselection", description="Select channels where the bot reacts to messages for translation.")
+    @app_commands.guild_only()
     async def channelselection(self, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.HTTPException:
+            pass
+
         try:
             guild = interaction.guild
             if not guild:
-                await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
+                await interaction.followup.send("❌ Cannot select channels outside a server.", ephemeral=True)
                 return
 
             options = [
@@ -34,51 +49,78 @@ class AdminCommands(commands.Cog):
                 for ch in guild.text_channels
             ]
 
-            if not options:
-                await interaction.response.send_message("❌ No text channels found.", ephemeral=True)
-                return
-
-            # Create dropdown
             select = discord.ui.Select(
-                placeholder="Select channels for translation reactions...",
-                options=options,
+                placeholder="Select channels for translation",
                 min_values=1,
-                max_values=len(options)
+                max_values=len(options),
+                options=options
             )
 
-            async def select_callback(select_interaction: discord.Interaction):
-                selected_ids = [int(val) for val in select.values]
+            async def callback(select_interaction: discord.Interaction):
+                selected_ids = [int(cid) for cid in select.values]
                 await database.set_translation_channels(guild.id, selected_ids)
-                await select_interaction.response.send_message(
-                    f"✅ Channels updated: {', '.join([guild.get_channel(ch_id).mention for ch_id in selected_ids])}",
-                    ephemeral=True
-                )
+                await select_interaction.response.send_message(f"✅ Translation channels set: {', '.join([guild.get_channel(cid).mention for cid in selected_ids if guild.get_channel(cid)])}", ephemeral=True)
 
-            select.callback = select_callback
+            select.callback = callback
             view = discord.ui.View()
             view.add_item(select)
-
-            await interaction.response.send_message(
-                "Select one or multiple channels for translation reactions:",
-                view=view,
-                ephemeral=True
-            )
+            await interaction.followup.send("Select the channels for translation:", view=view, ephemeral=True)
 
         except Exception as e:
-            await self.admin_error(interaction, e)
+            await self.safe_error(interaction, e)
 
     # -----------------------
-    # Error handler for admin commands
+    # Set error channel
     # -----------------------
-    async def admin_error(self, interaction: discord.Interaction, error):
+    @app_commands.command(name="seterrorchannel", description="Define the error logging channel for your server.")
+    async def seterrorchannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         try:
-            # If already acknowledged, use followup
-            if interaction.response.is_done():
-                await interaction.followup.send(f"❌ Error: {error}", ephemeral=True)
-            else:
-                await interaction.response.send_message(f"❌ Error: {error}", ephemeral=True)
+            await interaction.response.defer(ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+        try:
+            guild_id = interaction.guild.id if interaction.guild else None
+            if guild_id is None:
+                await interaction.followup.send("❌ Cannot set error channel outside a server.", ephemeral=True)
+                return
+            await database.set_error_channel(guild_id, channel.id)
+            await interaction.followup.send(f"✅ Error channel set to {channel.mention}.", ephemeral=True)
         except Exception as e:
-            print(f"[Admin Error] {e}")
+            await self.safe_error(interaction, e)
+
+    # -----------------------
+    # Set bot emote
+    # -----------------------
+    @app_commands.command(name="emote", description="Set the bot's reaction emote for translation channels.")
+    async def emote(self, interaction: discord.Interaction, emote: str):
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+        try:
+            guild_id = interaction.guild.id if interaction.guild else None
+            if guild_id is None:
+                await interaction.followup.send("❌ Cannot set emote outside a server.", ephemeral=True)
+                return
+            await database.set_bot_emote(guild_id, emote)
+            await interaction.followup.send(f"✅ Bot reaction emote set to {emote}.", ephemeral=True)
+        except Exception as e:
+            await self.safe_error(interaction, e)
+
+    # -----------------------
+    # Centralized error handler
+    # -----------------------
+    async def safe_error(self, interaction: discord.Interaction, error):
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ Error: {error}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"❌ Error: {error}", ephemeral=True)
+        except discord.HTTPException:
+            # Already acknowledged; log to console as last resort
+            print(f"[AdminCommands Error] {error}")
 
 async def setup(bot):
     await bot.add_cog(AdminCommands(bot))
