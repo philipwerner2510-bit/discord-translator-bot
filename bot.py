@@ -1,5 +1,6 @@
 import os
 import asyncio
+import discord
 from discord.ext import commands
 
 # -----------------------------
@@ -50,11 +51,11 @@ async def on_ready():
 # Minimal test command
 # -----------------------------
 @bot.tree.command(name="test", description="Test if interactions work")
-async def test(interaction):
+async def test(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Test command works!", ephemeral=True)
 
 # -----------------------------
 # Run bot
 # -----------------------------
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main()) 
