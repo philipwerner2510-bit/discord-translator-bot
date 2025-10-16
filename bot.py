@@ -14,12 +14,11 @@ intents.dm_messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -----------------------------
-# Async main: init DB + load cogs
+# Load all cogs async
 # -----------------------------
 async def main():
-    # Initialize database tables
+    # Initialize DB before starting
     await database.init_db()
-
     async with bot:
         for ext in ["cogs.user_commands", "cogs.admin_commands", "cogs.translate", "cogs.events"]:
             try:
@@ -30,12 +29,16 @@ async def main():
         await bot.start(os.environ["BOT_TOKEN"])
 
 # -----------------------------
-# Sync slash commands on ready
+# Sync all slash commands on ready
 # -----------------------------
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
-    print(f"✅ Logged in as {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ Logged in as {bot.user}")
+        print(f"✅ Synced {len(synced)} commands")
+    except Exception as e:
+        print(f"❌ Slash command sync failed: {e}")
 
 # -----------------------------
 # Test command
