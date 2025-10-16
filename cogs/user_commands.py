@@ -21,3 +21,55 @@ class UserCommands(commands.Cog):
 
     # -----------------------
     # Help command
+    # -----------------------
+    @app_commands.command(name="help", description="Show help for available commands.")
+    async def help(self, interaction: discord.Interaction):
+        is_admin = interaction.user.guild_permissions.administrator
+
+        embed = discord.Embed(
+            title="📖 Demon Translator Help",
+            description="List of available commands",
+            color=0xde002a
+        )
+
+        embed.add_field(
+            name="/setmylang `<lang>`",
+            value="Set your personal translation language (e.g. `en`, `de`, `fr`).\n"
+                  "This overrides the server default language.",
+            inline=False
+        )
+
+        embed.add_field(
+            name="/translate `<text>` `<target_lang>`",
+            value="Translate a specific text manually to a chosen language.",
+            inline=False
+        )
+
+        if is_admin:
+            embed.add_field(
+                name="🛠️ Admin Commands",
+                value="*These commands are only visible to administrators.*",
+                inline=False
+            )
+            embed.add_field(
+                name="/defaultlang `<lang>`",
+                value="Set the **default translation language** for the server.",
+                inline=False
+            )
+            embed.add_field(
+                name="/channelselection",
+                value="Select one or multiple channels where the bot will react to messages for translation.",
+                inline=False
+            )
+            embed.add_field(
+                name="/seterrorchannel `<channel>`",
+                value="Define the error logging channel for your server.",
+                inline=False
+            )
+
+        embed.set_footer(text="Bot developed by Demon Translator")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+async def setup(bot):
+    await bot.add_cog(UserCommands(bot))
