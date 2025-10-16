@@ -28,10 +28,7 @@ class AdminCommands(commands.Cog):
             await interaction.followup.send("❌ No channels available to select.", ephemeral=True)
             return
 
-        options = [
-            discord.SelectOption(label=c.name, value=str(c.id))
-            for c in channels[:25]
-        ]
+        options = [discord.SelectOption(label=c.name, value=str(c.id)) for c in channels[:25]]
 
         select = discord.ui.Select(
             placeholder="Select translation channels",
@@ -63,13 +60,13 @@ class AdminCommands(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="emote", description="Set the bot reaction emote for translation channels")
+    @app_commands.command(name="emote", description="Set the reaction emote for the bot")
     @app_commands.checks.has_permissions(administrator=True)
     async def emote(self, interaction: discord.Interaction, emote: str):
         await interaction.response.defer(ephemeral=True)
         try:
-            await database.set_guild_emote(interaction.guild.id, emote)
-            await interaction.followup.send(f"✅ Bot reaction emote set to {emote}", ephemeral=True)
+            await database.set_custom_emote(interaction.guild.id, emote)
+            await interaction.followup.send(f"✅ Bot emote set to {emote}", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
