@@ -4,7 +4,6 @@ from discord import app_commands
 from utils import database
 import aiohttp
 from googletrans import Translator as GoogleTranslator
-from datetime import datetime
 
 LIBRE_URL = "https://libretranslate.de/translate"
 
@@ -42,18 +41,18 @@ class Translate(commands.Cog):
         guild_id = message.guild.id if message.guild else None
         channel_ids = await database.get_translation_channels(guild_id)
 
-        # Only react if it's in a selected channel and emoji is 🔃
-        if not (channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == "🔃"):
+        # Only react if it's in a selected channel and emoji matches
+        if not (channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == await database.get_bot_emote(guild_id) or "🔃"):
             return
 
         try:
             user_lang = await database.get_user_lang(user.id)
             target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
 
-            # Translate with fallback
+            # Translate text (single attempt, fallback inside)
             translated_text, detected = await self.translate_text(message.content, target_lang)
 
-            # Embed with author info
+            # Build embed
             embed = discord.Embed(
                 description=translated_text,
                 color=0xde002a
@@ -65,7 +64,7 @@ class Translate(commands.Cog):
             timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
             embed.set_footer(text=f"Translated at {timestamp} | Language: {target_lang} | Detected: {detected}")
 
-            # Original message link below
+            # Send DM once
             original_msg_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
             await user.send(embed=embed)
             await user.send(f"[Original message]({original_msg_link})")
