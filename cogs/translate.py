@@ -4,7 +4,7 @@ from discord import app_commands
 from utils import database
 import aiohttp
 
-LIBRE_URL = "https://libretranslate.de/translate"
+LIBRE_URL = "https://libretranslate.com/translate"  # Updated working URL
 
 class Translate(commands.Cog):
     def __init__(self, bot):
@@ -35,29 +35,33 @@ class Translate(commands.Cog):
     async def on_reaction_add(self, reaction, user):
         if user.bot:
             return
+
         message = reaction.message
         guild_id = message.guild.id if message.guild else None
-        channel_ids = await database.get_translation_channels(guild_id)
+        if not guild_id:
+            return
 
-        # Only react if it's in a selected channel and emoji is 🔃
-        if channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == "🔃":
+        channel_ids = await database.get_translation_channels(guild_id)
+        bot_emote = await database.get_bot_emote(guild_id) or "🔃"
+
+        # Only react if in selected channels and emoji matches
+        if channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == bot_emote:
             try:
                 user_lang = await database.get_user_lang(user.id)
                 target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
 
                 translated_text, detected = await self.translate_text(message.content, target_lang)
 
-                # Embed with author info
                 embed = discord.Embed(color=0xde002a)
-                embed.set_author(
-                    name=message.author.display_name,
-                    icon_url=message.author.display_avatar.url
-                )
-                embed.set_footer(text=f"Translated from {message.content[:50]}... | Language: {target_lang}")
+                embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
+                embed.set_footer(text=f"Translated from '{message.content[:50]}...' | Language: {target_lang}")
 
                 await user.send(embed=embed)
                 await user.send(translated_text)
+
+                # Remove user reaction after sending translation
                 await reaction.remove(user)
+
             except Exception as e:
                 error_channel_id = await database.get_error_channel(guild_id)
                 if error_channel_id:
@@ -68,13 +72,16 @@ class Translate(commands.Cog):
                     print(f"❌ Error: {e}")
 
     # -----------------------
-    # Helper: Translate text via public LibreTranslate
+    # Helper: Translate text via LibreTranslate
     # -----------------------
     async def translate_text(self, text: str, target_lang: str):
         async with aiohttp.ClientSession() as session:
             async with session.post(LIBRE_URL, json={"q": text, "source": "auto", "target": target_lang}) as resp:
-                data = await resp.json()
+                if resp.status != 200:
+                    raise Exception(f"Translation API returned status {resp.status}")
+                data = await resp.json(content_type=None)  # content_type=None allows text/html responses
                 return data["translatedText"], data.get("detectedLanguage", "unknown")
+
 
 async def setup(bot):
     await bot.add_cog(Translate(bot))
