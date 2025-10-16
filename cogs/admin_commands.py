@@ -13,18 +13,14 @@ class AdminCommands(commands.Cog):
     @app_commands.command(name="defaultlang", description="Set server default translation language")
     @app_commands.checks.has_permissions(administrator=True)
     async def defaultlang(self, interaction: discord.Interaction, lang: str):
-        await interaction.response.defer(ephemeral=True)
         try:
             await database.set_server_lang(interaction.guild.id, lang.lower())
-            await interaction.followup.send(f"✅ Server default language set to `{lang}`", ephemeral=True)
+            await interaction.response.send_message(f"✅ Server default language set to `{lang}`", ephemeral=True)
         except Exception as e:
-            if interaction.response.is_done():
-                await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
-            else:
-                await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
     # -----------------------
-    # Select translation channels
+    # Set translation channels
     # -----------------------
     @app_commands.command(name="channelselection", description="Select channels for translation reactions")
     @app_commands.checks.has_permissions(administrator=True)
@@ -37,10 +33,7 @@ class AdminCommands(commands.Cog):
             await interaction.followup.send("❌ No channels available to select.", ephemeral=True)
             return
 
-        options = [
-            discord.SelectOption(label=c.name, value=str(c.id))
-            for c in channels[:25]
-        ]
+        options = [discord.SelectOption(label=c.name, value=str(c.id)) for c in channels[:25]]
 
         select = discord.ui.Select(
             placeholder="Select translation channels",
@@ -68,15 +61,11 @@ class AdminCommands(commands.Cog):
     @app_commands.command(name="seterrorchannel", description="Set channel for error logging")
     @app_commands.checks.has_permissions(administrator=True)
     async def seterrorchannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        await interaction.response.defer(ephemeral=True)
         try:
             await database.set_error_channel(interaction.guild.id, channel.id)
-            await interaction.followup.send(f"✅ Error channel set to {channel.mention}", ephemeral=True)
+            await interaction.response.send_message(f"✅ Error channel set to {channel.mention}", ephemeral=True)
         except Exception as e:
-            if interaction.response.is_done():
-                await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
-            else:
-                await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
     # -----------------------
     # Set server bot emote
@@ -84,15 +73,11 @@ class AdminCommands(commands.Cog):
     @app_commands.command(name="emote", description="Set the emote the bot uses for translation reactions")
     @app_commands.checks.has_permissions(administrator=True)
     async def emote(self, interaction: discord.Interaction, emoji: str):
-        await interaction.response.defer(ephemeral=True)
         try:
             await database.set_bot_emote(interaction.guild.id, emoji)
-            await interaction.followup.send(f"✅ Bot emote set to {emoji}", ephemeral=True)
+            await interaction.response.send_message(f"✅ Bot emote set to {emoji}", ephemeral=True)
         except Exception as e:
-            if interaction.response.is_done():
-                await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
-            else:
-                await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
     # -----------------------
     # Error handler
@@ -103,15 +88,13 @@ class AdminCommands(commands.Cog):
     @emote.error
     async def admin_error(self, interaction, error):
         if isinstance(error, app_commands.errors.MissingPermissions):
-            if interaction.response.is_done():
-                await interaction.followup.send("🚫 You need Administrator permissions.", ephemeral=True)
-            else:
-                await interaction.response.send_message("🚫 You need Administrator permissions.", ephemeral=True)
+            await interaction.response.send_message("🚫 You need Administrator permissions.", ephemeral=True)
         else:
-            if interaction.response.is_done():
-                await interaction.followup.send(f"❌ Error: {error}", ephemeral=True)
-            else:
+            # Check if interaction was already responded to
+            try:
                 await interaction.response.send_message(f"❌ Error: {error}", ephemeral=True)
+            except discord.errors.InteractionResponded:
+                await interaction.followup.send(f"❌ Error: {error}", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(AdminCommands(bot))
