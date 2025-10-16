@@ -26,40 +26,23 @@ class UserCommands(commands.Cog):
             color=0xde002a
         )
 
-        # Commands everyone can use
         embed.add_field(
             name="/setmylang `<lang>`",
-            value="Set your personal translation language (e.g. `en`, `de`, `fr`). Overrides server default.",
+            value="Set your personal translation language (e.g. `en`, `de`, `fr`).",
             inline=False
         )
+
         embed.add_field(
             name="/translate `<text>` `<target_lang>`",
             value="Translate a specific text manually to a chosen language.",
             inline=False
         )
 
-        # Admin-only commands
         if is_admin:
-            embed.add_field(
-                name="🛠️ Admin Commands",
-                value="*Visible only to administrators.*",
-                inline=False
-            )
-            embed.add_field(
-                name="/defaultlang `<lang>`",
-                value="Set the server's default translation language.",
-                inline=False
-            )
-            embed.add_field(
-                name="/channelselection",
-                value="Select one or multiple channels where the bot will react for translations.",
-                inline=False
-            )
-            embed.add_field(
-                name="/seterrorchannel `<channel>`",
-                value="Set the channel for error logging.",
-                inline=False
-            )
+            embed.add_field(name="🛠️ Admin Commands", value="(Admins only)", inline=False)
+            embed.add_field(name="/defaultlang `<lang>`", value="Set default language for the server.", inline=False)
+            embed.add_field(name="/channelselection", value="Select channels for translation.", inline=False)
+            embed.add_field(name="/seterrorchannel `<channel>`", value="Set error logging channel.", inline=False)
 
         embed.set_footer(text="Bot developed by Polarix#1954")
         await interaction.response.send_message(embed=embed, ephemeral=True)
