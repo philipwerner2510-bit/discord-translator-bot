@@ -5,8 +5,6 @@ from utils import database
 class EventCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.bot.add_listener(self.on_reaction_add)
-        self.bot.add_listener(self.on_message)
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -21,28 +19,29 @@ class EventCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
-        if user.bot or str(reaction.emoji) != "🔃":
+        if user.bot:
             return
-        msg = reaction.message
-        await reaction.remove(user)
+        if str(reaction.emoji) != "🔃":
+            return
+        message = reaction.message
+        guild_id = message.guild.id
+        channels = await database.get_translation_channels(guild_id)
+        if message.channel.id not in channels:
+            return
 
-        # Determine language
         user_lang = await database.get_user_lang(user.id)
-        target_lang = user_lang or await database.get_server_lang(msg.guild.id) or "en"
+        if not user_lang:
+            user_lang = await database.get_server_lang(guild_id) or "en"
 
-        # Translation via Libre
-        async with aiohttp.ClientSession() as session:
-            async with session.post("https://libretranslate.de/translate", json={"q": msg.content, "source": "auto", "target": target_lang}) as resp:
-                data = await resp.json()
-                translated = data.get("translatedText", msg.content)
-                detected = data.get("detectedLanguage", "unknown")
+        translator = self.bot.get_cog("TranslateCog")
+        translated_text, detected = await translator.translate_text(message.content, user_lang)
 
-        # Embed DM
-        embed = discord.Embed(description=translated, color=0xde002a)
-        embed.set_author(name=msg.author.display_name, icon_url=msg.author.display_avatar.url)
-        embed.set_footer(text=f"Detected language: {detected} | Translated to: {target_lang}")
+        embed = discord.Embed(color=0xde002a)
+        embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
+        embed.set_footer(text=f"Translated from {message.content[:50]}... | Language: {user_lang}")
         try:
-            await user.send(embed=embed)
+            await user.send(content="🌐 Translation:", embed=embed)
+            await user.send(translated_text)
         except discord.Forbidden:
             print(f"Cannot DM user {user}.")
 
