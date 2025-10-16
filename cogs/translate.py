@@ -3,8 +3,8 @@ from discord.ext import commands
 from discord import app_commands
 from utils import database
 import aiohttp
+import datetime
 from googletrans import Translator
-from datetime import datetime
 
 LIBRE_URL = "https://libretranslate.de/translate"
 
@@ -21,97 +21,112 @@ class Translate(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         try:
             translated_text, detected = await self.translate_text(text, target_lang)
-            embed = discord.Embed(
-                title="🌐 Translation",
-                description=translated_text,
-                color=0xde002a
+            embed = self.create_embed(
+                author=interaction.user,
+                original_text=text,
+                translated_text=translated_text,
+                target_lang=target_lang,
+                detected_lang=detected,
+                timestamp=datetime.datetime.utcnow(),
+                original_msg_url=None
             )
-            embed.set_footer(text=f"Detected language: {detected} | Translated to: {target_lang}")
             await interaction.followup.send(embed=embed)
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
     # -----------------------
-    # React-to-translate logic
+    # Reaction-to-translate logic
     # -----------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
         if user.bot:
             return
+        if str(reaction.emoji) != "🔃":
+            return
+
         message = reaction.message
         guild_id = message.guild.id if message.guild else None
         channel_ids = await database.get_translation_channels(guild_id)
 
-        # Only react if it's in a selected channel and emoji is the bot's emote or default 🔃
-        bot_emote = await database.get_bot_emote(guild_id) or "🔃"
-        if channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == bot_emote:
-            try:
-                user_lang = await database.get_user_lang(user.id)
-                target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
+        if not (channel_ids and message.channel.id in channel_ids):
+            return
 
-                translated_text, detected = await self.translate_text(message.content, target_lang)
+        try:
+            # Determine target language
+            user_lang = await database.get_user_lang(user.id)
+            target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
 
-                # Create embed
-                embed = discord.Embed(
-                    description=translated_text,
-                    color=0xde002a
-                )
-                embed.set_author(
-                    name=message.author.display_name,
-                    icon_url=message.author.display_avatar.url
-                )
-                timestamp_str = message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
-                embed.set_footer(text=f"Translated at {timestamp_str} | Language: {target_lang} | Detected: {detected}")
+            # Translate text
+            translated_text, detected = await self.translate_text(message.content, target_lang)
 
-                # DM user with embed only
-                dm_channel = user.dm_channel or await user.create_dm()
-                await dm_channel.send(embed=embed)
+            # Embed with author info and timestamp
+            embed = self.create_embed(
+                author=message.author,
+                original_text=message.content,
+                translated_text=translated_text,
+                target_lang=target_lang,
+                detected_lang=detected,
+                timestamp=message.created_at,
+                original_msg_url=message.jump_url
+            )
 
-                # Add original message link underneath
-                original_link = f"[Original message]({message.jump_url})"
-                await dm_channel.send(original_link)
-
-                # Remove user's reaction
-                await reaction.remove(user)
-
-            except Exception as e:
-                # Send embed-styled error to error channel
-                error_channel_id = await database.get_error_channel(guild_id)
-                if error_channel_id:
-                    ch = message.guild.get_channel(error_channel_id)
-                    if ch:
-                        error_embed = discord.Embed(
-                            title="❌ Translation Error",
-                            color=0xde002a,
-                            description=f"**User:** {user} (`{user.id}`)\n**Message:** {message.content}\n**Error:** {e}"
-                        )
-                        await ch.send(embed=error_embed)
-                else:
-                    print(f"❌ Error: {e}")
+            await user.send(embed=embed)
+            await reaction.remove(user)
+        except Exception as e:
+            # Send to error channel in embed style
+            error_channel_id = await database.get_error_channel(guild_id)
+            if error_channel_id and message.guild:
+                ch = message.guild.get_channel(error_channel_id)
+                if ch:
+                    embed = discord.Embed(
+                        title="❌ Translation Error",
+                        description=f"**User:** {user} (`{user.id}`)\n"
+                                    f"**Original Message:** {message.content}\n"
+                                    f"**Error:** {e}",
+                        color=0xde002a,
+                        timestamp=datetime.datetime.utcnow()
+                    )
+                    embed.set_footer(text="Translation attempt failed")
+                    await ch.send(embed=embed)
+            else:
+                print(f"❌ Error: {e}")
 
     # -----------------------
-    # Helper: Translate text via LibreTranslate with Google fallback
+    # Helper: Translate text via LibreTranslate → fallback Google
     # -----------------------
     async def translate_text(self, text: str, target_lang: str):
         # Try LibreTranslate first
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    LIBRE_URL,
-                    json={"q": text, "source": "auto", "target": target_lang},
-                    headers={"Content-Type": "application/json"}
-                ) as resp:
-                    if resp.status != 200:
-                        raise Exception(f"Translation API returned status {resp.status}")
-                    data = await resp.json()
-                    return data["translatedText"], data.get("detectedLanguage", "unknown")
-        except Exception as libre_error:
-            # Fallback to Google Translate
+        async with aiohttp.ClientSession() as session:
             try:
-                result = self.google_translator.translate(text, dest=target_lang)
-                return result.text, result.src
-            except Exception as google_error:
-                raise Exception(f"LibreTranslate failed: {libre_error}\nGoogle Translate failed: {google_error}")
+                async with session.post(LIBRE_URL, json={"q": text, "source": "auto", "target": target_lang}) as resp:
+                    if resp.status != 200:
+                        raise Exception(f"LibreTranslate returned status {resp.status}")
+                    try:
+                        data = await resp.json()
+                        return data["translatedText"], data.get("detectedLanguage", "unknown")
+                    except aiohttp.ContentTypeError:
+                        raise Exception("LibreTranslate returned non-JSON response")
+            except Exception:
+                # Fallback to Google Translate
+                google_result = self.google_translator.translate(text, dest=target_lang)
+                detected = google_result.src or "unknown"
+                return google_result.text, detected
+
+    # -----------------------
+    # Embed creator helper
+    # -----------------------
+    def create_embed(self, author, original_text, translated_text, target_lang, detected_lang, timestamp, original_msg_url=None):
+        embed = discord.Embed(
+            description=translated_text,
+            color=0xde002a,
+            timestamp=timestamp
+        )
+        embed.set_author(name=author.display_name, icon_url=author.display_avatar.url)
+        footer_text = f"Translated to: {target_lang} | Detected: {detected_lang}"
+        embed.set_footer(text=footer_text)
+        if original_msg_url:
+            embed.add_field(name="\u200b", value=f"[Original message]({original_msg_url})", inline=False)
+        return embed
 
 async def setup(bot):
     await bot.add_cog(Translate(bot))
