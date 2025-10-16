@@ -24,6 +24,10 @@ class AdminCommands(commands.Cog):
         guild = interaction.guild
         channels = [c for c in guild.text_channels if c.permissions_for(guild.me).send_messages]
 
+        if not channels:
+            await interaction.followup.send("❌ No channels available to select.", ephemeral=True)
+            return
+
         options = [
             discord.SelectOption(label=c.name, value=str(c.id))
             for c in channels[:25]
@@ -45,7 +49,7 @@ class AdminCommands(commands.Cog):
             )
 
         select.callback = callback
-        view = discord.ui.View()
+        view = discord.ui.View(timeout=180)
         view.add_item(select)
         await interaction.followup.send("Select translation channels:", view=view, ephemeral=True)
 
