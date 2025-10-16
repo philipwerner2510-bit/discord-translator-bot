@@ -3,18 +3,15 @@ from discord.ext import commands
 from discord import app_commands
 from utils import database
 import aiohttp
+from googletrans import Translator
 from datetime import datetime
 
 LIBRE_URL = "https://libretranslate.de/translate"
 
-# Optional: import Google / Microsoft APIs if you configure API keys
-# from googletrans import Translator as GoogleTranslator
-# import ms_translation_api  # placeholder for Microsoft translation
-
 class Translate(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # self.google_translator = GoogleTranslator()  # Uncomment if using Google API
+        self.google_translator = Translator()
 
     # -----------------------
     # Slash command: /translate
@@ -24,7 +21,12 @@ class Translate(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         try:
             translated_text, detected = await self.try_translation(text, target_lang)
-            embed = self.build_embed(interaction.user, text, translated_text, target_lang, detected, None)
+            embed = discord.Embed(
+                title="🌐 Translation",
+                description=translated_text,
+                color=0xde002a
+            )
+            embed.set_footer(text=f"Detected: {detected} | Translated to: {target_lang} | Translated at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
             await interaction.followup.send(embed=embed)
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
@@ -36,85 +38,71 @@ class Translate(commands.Cog):
     async def on_reaction_add(self, reaction, user):
         if user.bot:
             return
-
         message = reaction.message
         guild_id = message.guild.id if message.guild else None
         channel_ids = await database.get_translation_channels(guild_id)
 
         if channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == "🔃":
             try:
+                # Determine user target language
                 user_lang = await database.get_user_lang(user.id)
                 target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
 
                 translated_text, detected = await self.try_translation(message.content, target_lang)
 
-                # Build embed
-                embed = self.build_embed(
-                    message.author,
-                    message.content,
-                    translated_text,
-                    target_lang,
-                    detected,
-                    message.jump_url,
-                    message.created_at
+                # Embed
+                embed = discord.Embed(
+                    description=translated_text,
+                    color=0xde002a
+                )
+                embed.set_author(
+                    name=message.author.display_name,
+                    icon_url=message.author.display_avatar.url
+                )
+                embed.set_footer(
+                    text=f"Translated at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | Language: {target_lang} | Detected: {detected}"
                 )
 
-                # Send only once
+                # Add a small link to original message below embed
+                original_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
+                embed.add_field(name="Original message", value=f"[Click here]({original_link})", inline=False)
+
                 await user.send(embed=embed)
                 await reaction.remove(user)
 
             except Exception as e:
                 error_channel_id = await database.get_error_channel(guild_id)
-                if error_channel_id and message.guild:
+                if error_channel_id:
                     ch = message.guild.get_channel(error_channel_id)
                     if ch:
-                        error_embed = discord.Embed(
+                        err_embed = discord.Embed(
                             title="❌ Translation Error",
-                            color=0xde002a,
-                            timestamp=datetime.utcnow()
+                            color=0xde002a
                         )
-                        error_embed.add_field(name="User", value=f"{user} (`{user.id}`)", inline=False)
-                        error_embed.add_field(name="Original Text", value=message.content, inline=False)
-                        error_embed.add_field(name="Error", value=str(e), inline=False)
-                        await ch.send(embed=error_embed)
+                        err_embed.add_field(name="User", value=f"{user} ({user.id})", inline=False)
+                        err_embed.add_field(name="Original Text", value=message.content or "No content", inline=False)
+                        err_embed.add_field(name="Error", value=str(e), inline=False)
+                        err_embed.set_footer(text=f"Channel: {message.channel.name}")
+                        await ch.send(embed=err_embed)
                 else:
                     print(f"❌ Error: {e}")
 
     # -----------------------
-    # Helper: Build embed
-    # -----------------------
-    def build_embed(self, author, original_text, translated_text, target_lang, detected, jump_url=None, timestamp=None):
-        embed = discord.Embed(
-            description=translated_text,
-            color=0xde002a,
-            timestamp=timestamp
-        )
-        embed.set_author(
-            name=author.display_name,
-            icon_url=author.display_avatar.url
-        )
-        embed.set_footer(text=f"Language: {target_lang} | Detected: {detected}")
-        if jump_url:
-            embed.add_field(name="Original message", value=f"[Click here]({jump_url})", inline=False)
-        return embed
-
-    # -----------------------
-    # Helper: Try translation with fallback
+    # Try multiple translation engines
     # -----------------------
     async def try_translation(self, text: str, target_lang: str):
-        # Try LibreTranslate first
+        # First try LibreTranslate
         try:
-            translated_text, detected = await self.translate_libre(text, target_lang)
-            return translated_text, detected
-        except Exception:
-            # Optional fallback: Google Translate
-            try:
-                translated_text, detected = await self.translate_google(text, target_lang)
-                return translated_text, detected
-            except Exception:
-                # Optional fallback: Microsoft Translate
-                translated_text, detected = await self.translate_microsoft(text, target_lang)
-                return translated_text, detected
+            return await self.translate_libre(text, target_lang)
+        except Exception as e:
+            print(f"LibreTranslate failed: {e}, falling back to Google")
+
+        # Then try Google Translate
+        try:
+            return await self.translate_google(text, target_lang)
+        except Exception as e:
+            print(f"Google Translate failed: {e}")
+            raise Exception("All translation services failed.")
 
     # -----------------------
     # LibreTranslate
@@ -128,22 +116,11 @@ class Translate(commands.Cog):
                 return data["translatedText"], data.get("detectedLanguage", "unknown")
 
     # -----------------------
-    # Google Translate (placeholder, requires setup)
+    # Google Translate
     # -----------------------
     async def translate_google(self, text: str, target_lang: str):
-        # Example using googletrans
-        from googletrans import Translator
-        translator = Translator()
-        result = translator.translate(text, dest=target_lang)
+        result = self.google_translator.translate(text, dest=target_lang)
         return result.text, result.src
-
-    # -----------------------
-    # Microsoft Translate (placeholder, requires API key)
-    # -----------------------
-    async def translate_microsoft(self, text: str, target_lang: str):
-        # Implement Microsoft Translate API call here
-        # For now, just fallback returns original text
-        return text, "unknown"
 
 async def setup(bot):
     await bot.add_cog(Translate(bot))
