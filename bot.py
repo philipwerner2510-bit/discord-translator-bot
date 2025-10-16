@@ -13,20 +13,11 @@ intents.dm_messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -----------------------------
-# List of cogs
-# -----------------------------
-initial_extensions = [
-    "cogs.user_commands",
-    "cogs.admin_commands",
-    "cogs.translate"
-]
-
-# -----------------------------
-# Async main for proper cog loading
+# Load all cogs async
 # -----------------------------
 async def main():
     async with bot:
-        for ext in initial_extensions:
+        for ext in ["cogs.user_commands", "cogs.admin_commands", "cogs.translate"]:
             try:
                 await bot.load_extension(ext)
                 print(f"✅ Loaded {ext}")
@@ -35,23 +26,19 @@ async def main():
         await bot.start(os.environ["BOT_TOKEN"])
 
 # -----------------------------
-# Sync commands on ready
+# Sync all slash commands on ready
 # -----------------------------
 @bot.event
 async def on_ready():
-    synced = await bot.tree.sync()
-    print(f"✅ Synced {len(synced)} commands")
+    await bot.tree.sync()
     print(f"✅ Logged in as {bot.user}")
 
 # -----------------------------
-# Minimal test
+# Test command
 # -----------------------------
 @bot.tree.command(name="test", description="Test if interactions work")
 async def test(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Test command works!", ephemeral=True)
 
-# -----------------------------
-# Run bot
-# -----------------------------
 if __name__ == "__main__":
     asyncio.run(main())
