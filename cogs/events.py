@@ -1,7 +1,8 @@
 import discord
 from discord.ext import commands
-from utils import database as db
-from cogs.translate import Translate
+from utils import database
+
+from cogs.translate import Translate  # matches the class name now
 
 class EventCog(commands.Cog):
     def __init__(self, bot):
@@ -9,12 +10,13 @@ class EventCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author.bot or not message.guild:
+        if message.author.bot:
             return
-        channels = await db.get_translation_channels(message.guild.id)
+        channels = await database.get_translation_channels(message.guild.id)
         if message.channel.id in channels:
             try:
-                emote = await db.get_guild_emote(message.guild.id)
+                # Fetch the current emote from DB or default 🔃
+                emote = await database.get_reaction_emote(message.guild.id) or "🔃"
                 await message.add_reaction(emote)
             except discord.Forbidden:
                 print(f"Missing permission to add reactions in {message.channel.name}")
@@ -23,37 +25,28 @@ class EventCog(commands.Cog):
     async def on_reaction_add(self, reaction, user):
         if user.bot:
             return
-        message = reaction.message
-        guild_id = message.guild.id if message.guild else None
-        if not guild_id:
+        if str(reaction.emoji) not in ["🔃"]:  # add other custom emotes if needed
             return
-
-        channels = await db.get_translation_channels(guild_id)
-        if message.channel.id not in channels:
-            return
-
-        if str(reaction.emoji) != await db.get_guild_emote(guild_id):
-            return
-
+        msg = reaction.message
         await reaction.remove(user)
 
         # Determine language
-        user_lang = await db.get_user_lang(user.id)
+        user_lang = await database.get_user_lang(user.id)
         if not user_lang:
-            user_lang = await db.get_server_lang(guild_id) or "en"
+            user_lang = await database.get_server_lang(msg.guild.id) or "en"
 
         translator: Translate = self.bot.get_cog("Translate")
-        translated_text, detected = await translator.translate_text(message.content, user_lang)
+        translated = await translator.translate_text(msg.content, user_lang)
 
         # DM with embed
         embed = discord.Embed(
-            description=translated_text,
+            description=translated,
             color=0xDE002A
         )
-        embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
-        embed.set_footer(text=f"Translated from {message.content[:50]}... | Language: {user_lang}")
+        embed.set_author(name=msg.author.display_name, icon_url=msg.author.display_avatar.url)
+        embed.set_footer(text=f"Translated from {msg.content[:50]}... | Language: {user_lang}")
         try:
-            await user.send(content="🌐 Translation:", embed=embed)
+            await user.send(content=f"🌐 Translation:", embed=embed)
         except discord.Forbidden:
             print(f"Cannot DM user {user}.")
 
