@@ -2,7 +2,7 @@ import os
 import asyncio
 import discord
 from discord.ext import commands
-from utils.database import init_db  # directly import init_db
+from utils import database
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -17,8 +17,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # Load all cogs async
 # -----------------------------
 async def main():
-    # Initialize the database first
-    await init_db()
+    # Initialize database
+    await database.init_db()
 
     async with bot:
         for ext in ["cogs.user_commands", "cogs.admin_commands", "cogs.translate", "cogs.events"]:
@@ -27,7 +27,6 @@ async def main():
                 print(f"✅ Loaded {ext}")
             except Exception as e:
                 print(f"❌ Failed to load {ext}: {e}")
-
         await bot.start(os.environ["BOT_TOKEN"])
 
 # -----------------------------
