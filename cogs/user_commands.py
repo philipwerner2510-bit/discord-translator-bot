@@ -19,16 +19,17 @@ class UserCommands(commands.Cog):
     @app_commands.command(name="help", description="Show help for available commands.")
     async def help(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
+
         embed = discord.Embed(
             title="📖 Demon Translator Help",
             description="List of available commands",
             color=0xde002a
         )
 
-        # Non-admin commands
+        # Commands everyone can use
         embed.add_field(
             name="/setmylang `<lang>`",
-            value="Set your personal translation language (overrides server default).",
+            value="Set your personal translation language (e.g. `en`, `de`, `fr`). Overrides server default.",
             inline=False
         )
         embed.add_field(
@@ -41,22 +42,22 @@ class UserCommands(commands.Cog):
         if is_admin:
             embed.add_field(
                 name="🛠️ Admin Commands",
-                value="*These commands are only visible to administrators.*",
+                value="*Visible only to administrators.*",
                 inline=False
             )
             embed.add_field(
                 name="/defaultlang `<lang>`",
-                value="Set the default translation language for the server.",
+                value="Set the server's default translation language.",
                 inline=False
             )
             embed.add_field(
                 name="/channelselection",
-                value="Select one or multiple channels for translation reactions.",
+                value="Select one or multiple channels where the bot will react for translations.",
                 inline=False
             )
             embed.add_field(
                 name="/seterrorchannel `<channel>`",
-                value="Define the error logging channel for your server.",
+                value="Set the channel for error logging.",
                 inline=False
             )
 
