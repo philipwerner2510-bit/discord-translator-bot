@@ -1,45 +1,60 @@
 import os
-import discord
-from discord.ext import commands
 import asyncio
+from discord.ext import commands
 
-# Get the token directly from environment variables
-TOKEN = os.environ["BOT_TOKEN"]
-
-# Intents
+# -----------------------------
+# Bot setup
+# -----------------------------
 intents = discord.Intents.default()
+intents.message_content = True
 intents.messages = True
 intents.reactions = True
-intents.message_content = True
 intents.guilds = True
 intents.dm_messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# List of cogs to load
+# List of your cogs
 initial_extensions = [
-    "cogs.admin_commands",
     "cogs.user_commands",
-    "cogs.translate",
-    "cogs.events"
+    "cogs.admin_commands",
+    "cogs.translate"
 ]
 
-# Event: Bot ready
-@bot.event
-async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ Synced {len(synced)} commands")
-    except Exception as e:
-        print(f"❌ Sync failed: {e}")
-
-# Async main to properly await extensions
+# -----------------------------
+# Async main for proper cog loading
+# -----------------------------
 async def main():
     async with bot:
+        # Load all cogs
         for ext in initial_extensions:
-            await bot.load_extension(ext)
-        await bot.start(TOKEN)
+            try:
+                await bot.load_extension(ext)
+                print(f"✅ Loaded {ext}")
+            except Exception as e:
+                print(f"❌ Failed to load {ext}: {e}")
+        
+        # Start the bot
+        await bot.start(os.environ["BOT_TOKEN"])
 
+# -----------------------------
+# on_ready event for syncing commands
+# -----------------------------
+@bot.event
+async def on_ready():
+    synced = await bot.tree.sync()
+    print(f"✅ Synced {len(synced)} commands")
+    print(f"✅ Logged in as {bot.user}")
+
+# -----------------------------
+# Minimal test command
+# -----------------------------
+@bot.tree.command(name="test", description="Test if interactions work")
+async def test(interaction):
+    await interaction.response.send_message("✅ Test command works!", ephemeral=True)
+
+# -----------------------------
+# Run bot
+# -----------------------------
 if __name__ == "__main__":
     asyncio.run(main())
