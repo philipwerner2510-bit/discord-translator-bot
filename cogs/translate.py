@@ -3,14 +3,14 @@ from discord.ext import commands
 from discord import app_commands
 from utils import database
 import aiohttp
-from googletrans import Translator as GoogleTranslator
+from googletrans import Translator
 
 LIBRE_URL = "https://libretranslate.de/translate"
 
 class Translate(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.google_translator = GoogleTranslator()
+        self.google_translator = Translator()
 
     # -----------------------
     # Slash command: /translate
@@ -19,101 +19,92 @@ class Translate(commands.Cog):
     async def translate(self, interaction: discord.Interaction, text: str, target_lang: str):
         await interaction.response.defer(ephemeral=True)
         try:
-            translated_text, detected = await self.translate_text(text, target_lang)
+            translated_text, detected = await self.safe_translate(text, target_lang)
+
             embed = discord.Embed(
                 title="🌐 Translation",
+                description=translated_text,
                 color=0xde002a
             )
-            embed.add_field(name="Original Text", value=text[:1024], inline=False)
-            embed.add_field(name="Translated Text", value=translated_text[:1024], inline=False)
-            embed.set_footer(text=f"Detected language: {detected} | Translated to: {target_lang}")
-            await interaction.followup.send(embed=embed)
+            embed.set_footer(text=f"Detected: {detected} | Translated to: {target_lang}")
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
     # -----------------------
-    # React-to-translate logic
+    # Reaction-to-translate logic
     # -----------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
         if user.bot:
             return
-
         message = reaction.message
         guild_id = message.guild.id if message.guild else None
+        if not guild_id:
+            return
+
         channel_ids = await database.get_translation_channels(guild_id)
-
-        if not (channel_ids and message.channel.id in channel_ids):
-            return
-
         bot_emote = await database.get_bot_emote(guild_id) or "🔃"
-        if str(reaction.emoji) != bot_emote:
-            return
 
-        try:
-            user_lang = await database.get_user_lang(user.id)
-            target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
+        if channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == bot_emote:
+            try:
+                user_lang = await database.get_user_lang(user.id)
+                target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
 
-            translated_text, detected = await self.translate_text(message.content, target_lang)
+                translated_text, detected = await self.safe_translate(message.content, target_lang)
 
-            # Minimal DM embed
-            embed = discord.Embed(color=0xde002a)
-            embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
-            embed.add_field(name="Original Text", value=(message.content or "")[:1024], inline=False)
-            embed.add_field(name="Translated Text", value=(translated_text or "")[:1024], inline=False)
+                embed = discord.Embed(
+                    color=0xde002a,
+                    description=translated_text
+                )
+                embed.set_author(
+                    name=message.author.display_name,
+                    icon_url=message.author.display_avatar.url
+                )
+                timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                embed.set_footer(
+                    text=f"Translated at {timestamp} | Language: {target_lang} | Detected: {detected} | [Original message]({message.jump_url})"
+                )
 
-            # Minimal footer with timestamp and jump link
-            guild_name = message.guild.name if message.guild else "DM"
-            channel_name = message.channel.name if hasattr(message.channel, "name") else "DM"
-            msg_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}" if message.guild else ""
-            footer_text = f"{guild_name} • #{channel_name}"
-            if msg_link:
-                footer_text += f" • [Jump to message]({msg_link})"
+                await user.send(embed=embed)
+                await reaction.remove(user)
 
-            embed.set_footer(text=footer_text)
-            embed.timestamp = message.created_at
-
-            await user.send(embed=embed)
-            await reaction.remove(user)
-
-        except Exception as e:
-            # Send error embed to selected error channel
-            error_channel_id = await database.get_error_channel(guild_id)
-            if error_channel_id:
-                ch = message.guild.get_channel(error_channel_id) if message.guild else None
-                if ch:
-                    err_embed = discord.Embed(title="❌ Translation Error", color=0xde002a)
-                    err_embed.add_field(name="User", value=f"{user} ({user.id})", inline=False)
-                    err_embed.add_field(name="Original Text", value=(message.content or "")[:1024], inline=False)
-                    err_embed.add_field(name="Target Lang", value=target_lang, inline=False)
-                    err_embed.add_field(name="Error", value=str(e), inline=False)
-                    # Footer with minimal info
-                    err_embed.set_footer(text=footer_text)
-                    err_embed.timestamp = message.created_at
-                    await ch.send(embed=err_embed)
-            else:
-                print(f"❌ Error: {e}")
+            except Exception as e:
+                error_channel_id = await database.get_error_channel(guild_id)
+                if error_channel_id:
+                    ch = message.guild.get_channel(error_channel_id)
+                    if ch:
+                        error_embed = discord.Embed(
+                            title="❌ Translation Error",
+                            color=0xde002a,
+                            description=f"**User:** {user.mention}\n**Message:** {message.content[:200]}{'...' if len(message.content)>200 else ''}\n**Error:** {e}"
+                        )
+                        await ch.send(embed=error_embed)
+                else:
+                    print(f"❌ Error: {e}")
 
     # -----------------------
-    # Helper: Translate text via multiple free-tier engines
+    # Safe translate: LibreTranslate first, fallback to Google
     # -----------------------
-    async def translate_text(self, text: str, target_lang: str):
-        # Try LibreTranslate first
+    async def safe_translate(self, text: str, target_lang: str):
+        # Attempt LibreTranslate first
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(LIBRE_URL, json={"q": text, "source": "auto", "target": target_lang}) as resp:
-                    if resp.status != 200:
-                        raise Exception(f"Translation API returned status {resp.status}")
-                    data = await resp.json()
-                    return data["translatedText"], data.get("detectedLanguage", "unknown")
-        except Exception:
-            # Fallback: Google Translate
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data["translatedText"], data.get("detectedLanguage", "unknown")
+                    else:
+                        raise Exception(f"LibreTranslate returned status {resp.status}")
+        except Exception as e:
+            # Fallback to Google Translate
             try:
-                translated = self.google_translator.translate(text, dest=target_lang)
-                return translated.text, translated.src
+                result = self.google_translator.translate(text, dest=target_lang)
+                return result.text, result.src
             except Exception:
-                # Could add Microsoft Translator here if needed
-                raise Exception("All free translation engines failed.")
+                raise Exception(f"Both LibreTranslate and Google Translate failed: {e}")
 
 async def setup(bot):
     await bot.add_cog(Translate(bot))
