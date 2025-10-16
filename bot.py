@@ -1,6 +1,7 @@
 import os
 import discord
 from discord.ext import commands
+import asyncio
 
 # Get the token directly from environment variables
 TOKEN = os.environ["BOT_TOKEN"]
@@ -33,9 +34,12 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Sync failed: {e}")
 
-# Load cogs/extensions
-if __name__ == "__main__":
-    for ext in initial_extensions:
-        bot.load_extension(ext)
+# Async main to properly await extensions
+async def main():
+    async with bot:
+        for ext in initial_extensions:
+            await bot.load_extension(ext)
+        await bot.start(TOKEN)
 
-    bot.run(TOKEN)
+if __name__ == "__main__":
+    asyncio.run(main())
