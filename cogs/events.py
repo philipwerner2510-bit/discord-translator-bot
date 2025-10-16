@@ -8,59 +8,44 @@ class EventCog(commands.Cog):
         self.bot = bot
 
     # -----------------------
-    # Auto react to messages
+    # Add reaction to messages in selected channels
     # -----------------------
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author.bot or not message.guild:
+        if message.author.bot:
             return
-        channels = await db.get_translation_channels(message.guild.id)
-        if message.channel.id in channels:
-            emote = await db.get_server_emote(message.guild.id)  # fetch custom emote
-            try:
-                if emote:
-                    await message.add_reaction(emote)
-                else:
+
+        guild_id = message.guild.id
+        channel_ids = await db.get_translation_channels(guild_id)
+        bot_emote = await db.get_bot_emote(guild_id)  # fetch custom emote if set
+
+        if channel_ids and message.channel.id in channel_ids:
+            if bot_emote:
+                try:
+                    await message.add_reaction(bot_emote)
+                except discord.Forbidden:
+                    print(f"Missing permission to react with {bot_emote} in {message.channel.name}")
+            else:
+                # default emoji 🔃
+                try:
                     await message.add_reaction("🔃")
-            except discord.Forbidden:
-                print(f"Missing permission to add reactions in {message.channel.name}")
+                except discord.Forbidden:
+                    print(f"Missing permission to react in {message.channel.name}")
 
     # -----------------------
-    # React-to-translate logic
+    # Reaction-to-translate logic (delegates to Translate cog)
     # -----------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
-        if user.bot or not reaction.message.guild:
+        if user.bot:
             return
-        guild_id = reaction.message.guild.id
-        channel_ids = await db.get_translation_channels(guild_id)
-        emote = await db.get_server_emote(guild_id) or "🔃"
+        if str(reaction.emoji) not in ["🔃"]:
+            # you can expand this if you allow custom emotes for translation
+            return
 
-        if reaction.message.channel.id in channel_ids and str(reaction.emoji) == emote:
-            try:
-                user_lang = await db.get_user_lang(user.id)
-                target_lang = user_lang or await db.get_server_lang(guild_id) or "en"
-
-                translator: Translate = self.bot.get_cog("Translate")
-                translated_text, detected = await translator.translate_text(reaction.message.content, target_lang)
-
-                embed = discord.Embed(color=0xDE002A)
-                embed.set_author(
-                    name=reaction.message.author.display_name,
-                    icon_url=reaction.message.author.display_avatar.url
-                )
-                embed.set_footer(text=f"Translated from {reaction.message.content[:50]}... | Language: {detected}")
-                await user.send(embed=embed)
-                await user.send(translated_text)
-                await reaction.remove(user)
-            except Exception as e:
-                error_channel_id = await db.get_error_channel(guild_id)
-                if error_channel_id:
-                    ch = reaction.message.guild.get_channel(error_channel_id)
-                    if ch:
-                        await ch.send(f"❌ Error while translating: {e}")
-                else:
-                    print(f"[Guild {guild_id}] Error: {e}")
+        translate_cog: Translate = self.bot.get_cog("Translate")
+        if translate_cog:
+            await translate_cog.on_reaction_add(reaction, user)
 
 async def setup(bot):
     await bot.add_cog(EventCog(bot))
