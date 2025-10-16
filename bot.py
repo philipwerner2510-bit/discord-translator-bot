@@ -2,7 +2,7 @@ import os
 import asyncio
 import discord
 from discord.ext import commands
-from utils import database  # Updated database with init_db
+from utils import database
 
 intents = discord.Intents.default()
 intents.message_content = True
