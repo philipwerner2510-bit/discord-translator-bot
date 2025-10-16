@@ -1,49 +1,84 @@
-import os
-import asyncio
 import discord
 from discord.ext import commands
+from discord import app_commands
 from utils import database
+import aiohttp
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.messages = True
-intents.reactions = True
-intents.guilds = True
-intents.dm_messages = True
+LIBRE_URL = "https://libretranslate.de/translate"
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+class Translate(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
 
-# -----------------------------
-# Sync commands after cogs
-# -----------------------------
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f"✅ Logged in as {bot.user}")
+    # -----------------------
+    # Translate Slash Command
+    # -----------------------
+    @app_commands.command(name="translate", description="Translate a specific text manually.")
+    async def translate(self, interaction: discord.Interaction, text: str, target_lang: str):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            translated_text, detected = await self.translate_text(text, target_lang)
+            embed = discord.Embed(
+                title="🌐 Translation",
+                color=0xde002a
+            )
+            embed.set_footer(text=f"Detected language: {detected} | Translated to: {target_lang}")
+            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(translated_text)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
-# -----------------------------
-# Test command
-# -----------------------------
-@bot.tree.command(name="test", description="Test if interactions work")
-async def test(interaction: discord.Interaction):
-    await interaction.response.send_message("✅ Test command works!", ephemeral=True)
+    # -----------------------
+    # React-to-translate logic
+    # -----------------------
+    @commands.Cog.listener()
+    async def on_reaction_add(self, reaction, user):
+        if user.bot:
+            return
+        message = reaction.message
+        guild_id = message.guild.id if message.guild else None
+        channel_ids = await database.get_translation_channels(guild_id)
 
-# -----------------------------
-# Main async loader
-# -----------------------------
-async def main():
-    # Initialize database first
-    await database.init_db()
-
-    async with bot:
-        for ext in ["cogs.user_commands", "cogs.admin_commands", "cogs.translate"]:
+        # Only react if it's in a selected channel
+        if channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == "🔃":
             try:
-                await bot.load_extension(ext)
-                print(f"✅ Loaded {ext}")
+                user_lang = await database.get_user_lang(user.id)
+                target_lang = user_lang or await database.get_server_lang(guild_id)
+
+                if not target_lang:
+                    await user.send("❌ No language set. Use `/setmylang` or ask an admin to set a default.")
+                    return
+
+                translated_text, detected = await self.translate_text(message.content, target_lang)
+
+                # Build embed with author info
+                embed = discord.Embed(color=0xde002a)
+                embed.set_author(
+                    name=message.author.display_name,
+                    icon_url=message.author.avatar.url if message.author.avatar else discord.Embed.Empty
+                )
+                embed.set_footer(text=f"Detected language: {detected} | Translated to: {target_lang}")
+
+                await user.send(embed=embed)
+                await user.send(translated_text)
+                await reaction.remove(user)
             except Exception as e:
-                print(f"❌ Failed to load {ext}: {e}")
+                error_channel = await database.get_error_channel(guild_id)
+                if error_channel:
+                    ch = message.guild.get_channel(error_channel)
+                    if ch:
+                        await ch.send(f"❌ Error while translating: {e}")
+                else:
+                    print(f"❌ Error: {e}")
 
-        await bot.start(os.environ["BOT_TOKEN"])
+    # -----------------------
+    # Translation helper
+    # -----------------------
+    async def translate_text(self, text: str, target_lang: str):
+        async with aiohttp.ClientSession() as session:
+            async with session.post(LIBRE_URL, json={"q": text, "source": "auto", "target": target_lang}) as resp:
+                data = await resp.json()
+                return data["translatedText"], data.get("detectedLanguage", "unknown")
 
-if __name__ == "__main__":
-    asyncio.run(main()) 
+async def setup(bot):
+    await bot.add_cog(Translate(bot)) 
