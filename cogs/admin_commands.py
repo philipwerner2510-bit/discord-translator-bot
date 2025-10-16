@@ -17,18 +17,17 @@ class AdminCommands(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
-    @app_commands.command(name="channelselection", description="Select channels for translation reactions")
+    @app_commands.command(name="channelselection", description="Select translation channels")
     @app_commands.checks.has_permissions(administrator=True)
     async def channelselection(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         channels = [c for c in guild.text_channels if c.permissions_for(guild.me).send_messages]
-
         if not channels:
-            await interaction.followup.send("❌ No channels available to select.", ephemeral=True)
+            await interaction.followup.send("❌ No channels available.", ephemeral=True)
             return
 
-        options = [discord.SelectOption(label=c.name, value=str(c.id)) for c in channels[:25]]
+        options = [discord.SelectOption(label=c.name, value=str(c.id)) for c in channels]
 
         select = discord.ui.Select(
             placeholder="Select translation channels",
@@ -38,10 +37,10 @@ class AdminCommands(commands.Cog):
         )
 
         async def callback(interact: discord.Interaction):
-            selected_channels = [int(x) for x in select.values]
-            await database.set_translation_channels(guild.id, selected_channels)
+            selected_ids = [int(x) for x in select.values]
+            await database.set_translation_channels(guild.id, selected_ids)
             await interact.response.send_message(
-                f"✅ Translation channels set: {', '.join(f'<#{x}>' for x in selected_channels)}",
+                f"✅ Channels set: {', '.join(f'<#{x}>' for x in selected_ids)}",
                 ephemeral=True
             )
 
@@ -65,7 +64,7 @@ class AdminCommands(commands.Cog):
     @seterrorchannel.error
     async def admin_error(self, interaction, error):
         if isinstance(error, app_commands.errors.MissingPermissions):
-            await interaction.response.send_message("🚫 You need Administrator permissions.", ephemeral=True)
+            await interaction.response.send_message("🚫 Administrator permissions required.", ephemeral=True)
         else:
             await interaction.response.send_message(f"❌ Error: {error}", ephemeral=True)
 
