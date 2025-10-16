@@ -7,6 +7,9 @@ class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    # -----------------------
+    # Set My Language (per user)
+    # -----------------------
     @app_commands.command(name="setmylang", description="Set your personal translation language.")
     async def setmylang(self, interaction: discord.Interaction, lang: str):
         await interaction.response.defer(ephemeral=True)
@@ -16,6 +19,9 @@ class UserCommands(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"❌ Error setting your language: {e}", ephemeral=True)
 
+    # -----------------------
+    # Help command
+    # -----------------------
     @app_commands.command(name="help", description="Show help for available commands.")
     async def help(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
@@ -26,9 +32,12 @@ class UserCommands(commands.Cog):
             color=0xde002a
         )
 
+        # -----------------------
+        # Commands visible to everyone
+        # -----------------------
         embed.add_field(
             name="/setmylang `<lang>`",
-            value="Set your personal translation language (e.g. `en`, `de`, `fr`).",
+            value="Set your personal translation language (e.g. `en`, `de`, `fr`).\nThis overrides the server default language.",
             inline=False
         )
 
@@ -38,13 +47,38 @@ class UserCommands(commands.Cog):
             inline=False
         )
 
+        # -----------------------
+        # Admin commands
+        # -----------------------
         if is_admin:
-            embed.add_field(name="🛠️ Admin Commands", value="(Admins only)", inline=False)
-            embed.add_field(name="/defaultlang `<lang>`", value="Set default language for the server.", inline=False)
-            embed.add_field(name="/channelselection", value="Select channels for translation.", inline=False)
-            embed.add_field(name="/seterrorchannel `<channel>`", value="Set error logging channel.", inline=False)
+            embed.add_field(
+                name="🛠️ Admin Commands",
+                value="*These commands are only visible to administrators.*",
+                inline=False
+            )
+            embed.add_field(
+                name="/defaultlang `<lang>`",
+                value="Set the **default translation language** for the server.",
+                inline=False
+            )
+            embed.add_field(
+                name="/channelselection",
+                value="Select one or multiple channels where the bot will react to messages for translation.",
+                inline=False
+            )
+            embed.add_field(
+                name="/seterrorchannel `<channel>`",
+                value="Define the error logging channel for your server.",
+                inline=False
+            )
+            embed.add_field(
+                name="/emote `<emoji>`",
+                value="Set a custom reaction emote for translation messages.",
+                inline=False
+            )
 
         embed.set_footer(text="Bot developed by Polarix#1954")
+
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
