@@ -24,9 +24,10 @@ class UserCommands(commands.Cog):
     # -----------------------
     @app_commands.command(name="help", description="Show help for available commands.")
     async def help(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         is_admin = interaction.user.guild_permissions.administrator
         guild_id = interaction.guild.id if interaction.guild else None
-        current_emote = await database.get_guild_emote(guild_id) if guild_id else "🔃"
+        current_emote = await database.get_bot_emote(guild_id) if guild_id else "🔃"
 
         embed = discord.Embed(
             title="📖 Demon Translator Help",
@@ -78,7 +79,7 @@ class UserCommands(commands.Cog):
 
         embed.set_footer(text="Bot developed by Polarix#1954")
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
