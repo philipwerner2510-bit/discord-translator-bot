@@ -7,9 +7,6 @@ class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # -----------------------
-    # Set My Language (per user)
-    # -----------------------
     @app_commands.command(name="setmylang", description="Set your personal translation language.")
     async def setmylang(self, interaction: discord.Interaction, lang: str):
         await interaction.response.defer(ephemeral=True)
@@ -19,32 +16,28 @@ class UserCommands(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"❌ Error setting your language: {e}", ephemeral=True)
 
-    # -----------------------
-    # Help command
-    # -----------------------
     @app_commands.command(name="help", description="Show help for available commands.")
     async def help(self, interaction: discord.Interaction):
         is_admin = interaction.user.guild_permissions.administrator
-
         embed = discord.Embed(
             title="📖 Demon Translator Help",
             description="List of available commands",
             color=0xde002a
         )
 
+        # Non-admin commands
         embed.add_field(
             name="/setmylang `<lang>`",
-            value="Set your personal translation language (e.g. `en`, `de`, `fr`).\n"
-                  "This overrides the server default language.",
+            value="Set your personal translation language (overrides server default).",
             inline=False
         )
-
         embed.add_field(
             name="/translate `<text>` `<target_lang>`",
             value="Translate a specific text manually to a chosen language.",
             inline=False
         )
 
+        # Admin-only commands
         if is_admin:
             embed.add_field(
                 name="🛠️ Admin Commands",
@@ -53,12 +46,12 @@ class UserCommands(commands.Cog):
             )
             embed.add_field(
                 name="/defaultlang `<lang>`",
-                value="Set the **default translation language** for the server.",
+                value="Set the default translation language for the server.",
                 inline=False
             )
             embed.add_field(
                 name="/channelselection",
-                value="Select one or multiple channels where the bot will react to messages for translation.",
+                value="Select one or multiple channels for translation reactions.",
                 inline=False
             )
             embed.add_field(
@@ -67,8 +60,7 @@ class UserCommands(commands.Cog):
                 inline=False
             )
 
-        embed.set_footer(text="Bot developed by Demon Translator")
-
+        embed.set_footer(text="Bot developed by Polarix#1954")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
