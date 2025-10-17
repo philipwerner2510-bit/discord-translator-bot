@@ -14,7 +14,7 @@ class Translate(commands.Cog):
         self.google_translator = GoogleTranslator()
 
     # -----------------------
-    # Slash command: /translate
+    # Manual /translate command
     # -----------------------
     @app_commands.command(name="translate", description="Translate a specific text manually.")
     async def translate(self, interaction: discord.Interaction, text: str, target_lang: str):
@@ -32,24 +32,41 @@ class Translate(commands.Cog):
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
     # -----------------------
+    # Add emote when a message is sent in a translation channel
+    # -----------------------
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot:
+            return
+
+        guild_id = message.guild.id if message.guild else None
+        if not guild_id:
+            return
+
+        # Get channels and emote from DB
+        channel_ids = await database.get_translation_channels(guild_id)
+        bot_emote = await database.get_bot_emote(guild_id) or "🔃"
+
+        if channel_ids and message.channel.id in channel_ids:
+            try:
+                await message.add_reaction(bot_emote)
+            except Exception as e:
+                print(f"⚠️ Failed to add reaction: {e}")
+
+    # -----------------------
     # React-to-translate logic
     # -----------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
         if user.bot:
             return
-
         message = reaction.message
         guild_id = message.guild.id if message.guild else None
 
-        if guild_id is None:
-            return
-
-        # Get selected translation channels and emote
         channel_ids = await database.get_translation_channels(guild_id)
         bot_emote = await database.get_bot_emote(guild_id) or "🔃"
 
-        # Only react if it's in a selected channel and emoji matches
+        # Only respond if in a translation channel and emoji matches
         if not (channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == bot_emote):
             return
 
@@ -113,7 +130,6 @@ class Translate(commands.Cog):
                     return data["translatedText"], data.get("detectedLanguage", "unknown")
         except Exception as e:
             print(f"⚠️ LibreTranslate failed: {e}, falling back to Google Translate")
-            # Fallback to Google
             try:
                 result = self.google_translator.translate(text, dest=target_lang)
                 return result.text, result.src
