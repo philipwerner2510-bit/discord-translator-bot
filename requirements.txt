@@ -3,3 +3,4 @@ googletrans==4.0.0rc1
 aiohttp==3.9.5
 aiosqlite==0.20.0
 python-dotenv==1.0.1
+aiofiles==23.1.0
