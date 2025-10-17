@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from utils import database
+from utils import database, logging_utils
 
 class UserCommands(commands.Cog):
     def __init__(self, bot):
@@ -17,6 +17,8 @@ class UserCommands(commands.Cog):
             await database.set_user_lang(interaction.user.id, lang.lower())
             await interaction.followup.send(f"✅ Your personal language has been set to `{lang}`.", ephemeral=True)
         except Exception as e:
+            await logging_utils.log_error(self.bot, interaction.guild.id if interaction.guild else 0,
+                                          "Failed to set user language", e)
             await interaction.followup.send(f"❌ Error setting your language: {e}", ephemeral=True)
 
     # -----------------------
@@ -28,6 +30,7 @@ class UserCommands(commands.Cog):
         is_admin = interaction.user.guild_permissions.administrator
         guild_id = interaction.guild.id if interaction.guild else None
         current_emote = await database.get_bot_emote(guild_id) if guild_id else "🔃"
+        server_limit = await database.get_server_rate_limit(guild_id) if guild_id else None
 
         embed = discord.Embed(
             title="📖 Demon Translator Help",
@@ -45,7 +48,8 @@ class UserCommands(commands.Cog):
 
         embed.add_field(
             name="/translate `<text>` `<target_lang>`",
-            value="Translate a specific text manually to a chosen language.",
+            value=f"Translate a specific text manually to a chosen language.\n"
+                  f"Server rate limit: {server_limit or 'default'} translations/minute.",
             inline=False
         )
 
@@ -74,6 +78,11 @@ class UserCommands(commands.Cog):
             embed.add_field(
                 name="/emote `<emote>`",
                 value=f"Set the bot's reaction emote for translation channels.\nCurrent emote: {current_emote}",
+                inline=False
+            )
+            embed.add_field(
+                name="/setratelimit `<number>`",
+                value="Set maximum translations per minute for your server.",
                 inline=False
             )
 
