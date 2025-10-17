@@ -18,17 +18,15 @@ class AdminCommands(commands.Cog):
     @app_commands.guild_only()
     @app_commands.command(name="defaultlang", description="Set the default translation language for this server.")
     async def defaultlang(self, interaction: discord.Interaction, lang: str):
+        guild_id = interaction.guild.id
         lang = lang.lower()
         if lang not in SUPPORTED_LANGS:
             await interaction.response.send_message(
                 f"❌ Invalid language code. Supported: {', '.join(SUPPORTED_LANGS)}", ephemeral=True
             )
             return
-        try:
-            await database.set_server_lang(interaction.guild.id, lang)
-            await interaction.response.send_message(f"✅ Server default language set to `{lang}`.", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Failed to set default language: {e}", ephemeral=True)
+        await database.set_server_lang(guild_id, lang)
+        await interaction.response.send_message(f"✅ Server default language set to `{lang}`.", ephemeral=True)
 
     @app_commands.guild_only()
     @app_commands.command(name="channelselection", description="Select channels where the bot reacts to messages for translation.")
@@ -43,13 +41,10 @@ class AdminCommands(commands.Cog):
         )
 
         async def select_callback(select_interaction: discord.Interaction):
-            try:
-                selected_ids = [int(val) for val in select.values]
-                await database.set_translation_channels(guild.id, selected_ids)
-                mentions = ", ".join(f"<#{id}>" for id in selected_ids)
-                await select_interaction.response.send_message(f"✅ Translation channels set: {mentions}", ephemeral=True)
-            except Exception as e:
-                await select_interaction.response.send_message(f"❌ Failed to set channels: {e}", ephemeral=True)
+            selected_ids = [int(val) for val in select.values]
+            await database.set_translation_channels(guild.id, selected_ids)
+            mentions = ", ".join(f"<#{id}>" for id in selected_ids)
+            await select_interaction.response.send_message(f"✅ Translation channels set: {mentions}", ephemeral=True)
 
         select.callback = select_callback
         view = discord.ui.View(timeout=60)
@@ -67,14 +62,24 @@ class AdminCommands(commands.Cog):
                 )
                 return
 
-            # Check bot permissions
-            bot_member = guild.me
-            perms = channel.permissions_for(bot_member)
-            if not perms.send_messages or not perms.view_channel:
+            # Ensure it's a TextChannel
+            if not isinstance(channel, discord.TextChannel):
                 await interaction.response.send_message(
-                    f"❌ I cannot send messages in {channel.mention}. Choose another channel.", ephemeral=True
+                    "❌ Please select a standard text channel, not a thread or voice channel.", ephemeral=True
                 )
                 return
+
+            # Fetch bot member safely
+            bot_member = guild.me or await guild.fetch_member(self.bot.user.id)
+
+            # Skip permission check if bot has Admin
+            if not bot_member.guild_permissions.administrator:
+                perms = channel.permissions_for(bot_member)
+                if not perms.send_messages or not perms.view_channel:
+                    await interaction.response.send_message(
+                        f"❌ I cannot send messages in {channel.mention}. Choose another channel.", ephemeral=True
+                    )
+                    return
 
             await database.set_error_channel(guild.id, channel.id)
             await interaction.response.send_message(f"✅ Error channel set to {channel.mention}.", ephemeral=True)
@@ -92,12 +97,11 @@ class AdminCommands(commands.Cog):
         if not (is_custom or is_unicode):
             await interaction.response.send_message("❌ Invalid emote.", ephemeral=True)
             return
-        try:
-            await database.set_bot_emote(guild_id, emote)
-            await interaction.response.send_message(f"✅ Bot reaction emote set to {emote}.", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Failed to set emote: {e}", ephemeral=True)
+        await database.set_bot_emote(guild_id, emote)
+        await interaction.response.send_message(f"✅ Bot reaction emote set to {emote}.", ephemeral=True)
 
+    # -----------------------
+    # /langlist remains global
     @app_commands.command(name="langlist", description="Show all supported translation languages with flags, codes, and names.")
     async def langlist(self, interaction: discord.Interaction):
         lang_info = {
