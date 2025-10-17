@@ -4,7 +4,6 @@ from discord import app_commands
 from utils import database
 import aiohttp
 from googletrans import Translator as GoogleTranslator
-from datetime import datetime
 
 LIBRE_URL = "https://libretranslate.de/translate"
 
@@ -14,44 +13,22 @@ class Translate(commands.Cog):
         self.google_translator = GoogleTranslator()
 
     # -----------------------
-    # Manual /translate command
+    # Slash command: /translate
     # -----------------------
     @app_commands.command(name="translate", description="Translate a specific text manually.")
     async def translate(self, interaction: discord.Interaction, text: str, target_lang: str):
         await interaction.response.defer(ephemeral=True)
         try:
             translated_text, detected = await self.translate_text(text, target_lang)
+            # Embed
             embed = discord.Embed(
-                title="🌐 Translation",
-                description=translated_text,
+                description=translated_text + f"\n[Original message](https://discord.com/channels/{interaction.guild.id}/{interaction.channel.id}/{interaction.id})",
                 color=0xde002a
             )
-            embed.set_footer(text=f"Detected language: {detected} | Translated to: {target_lang}")
+            embed.set_footer(text=f"Translated at {interaction.created_at.strftime('%H:%M UTC')} | Language: {target_lang} | Detected: {detected}")
             await interaction.followup.send(embed=embed)
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
-
-    # -----------------------
-    # Add emote when a message is sent in a translation channel
-    # -----------------------
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
-
-        guild_id = message.guild.id if message.guild else None
-        if not guild_id:
-            return
-
-        # Get channels and emote from DB
-        channel_ids = await database.get_translation_channels(guild_id)
-        bot_emote = await database.get_bot_emote(guild_id) or "🔃"
-
-        if channel_ids and message.channel.id in channel_ids:
-            try:
-                await message.add_reaction(bot_emote)
-            except Exception as e:
-                print(f"⚠️ Failed to add reaction: {e}")
 
     # -----------------------
     # React-to-translate logic
@@ -62,11 +39,12 @@ class Translate(commands.Cog):
             return
         message = reaction.message
         guild_id = message.guild.id if message.guild else None
-
         channel_ids = await database.get_translation_channels(guild_id)
+
+        # Get bot emote
         bot_emote = await database.get_bot_emote(guild_id) or "🔃"
 
-        # Only respond if in a translation channel and emoji matches
+        # Only react if it's in a selected channel and emoji matches
         if not (channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == bot_emote):
             return
 
@@ -86,17 +64,21 @@ class Translate(commands.Cog):
                 name=message.author.display_name,
                 icon_url=message.author.display_avatar.url
             )
-            timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+            timestamp = message.created_at.strftime("%H:%M UTC")
             embed.set_footer(text=f"Translated at {timestamp} | Language: {target_lang} | Detected: {detected}")
 
-            # Original message link below
+            # Original message link hidden behind text
             original_msg_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
-            embed.add_field(name="Original message", value=f"[Click here]({original_msg_link})", inline=False)
+            embed.description += f"\n[Original message]({original_msg_link})"
 
+            # Send DM
             await user.send(embed=embed)
+
+            # Remove reaction
             await reaction.remove(user)
 
         except Exception as e:
+            # Send errors to server error channel
             error_channel_id = await database.get_error_channel(guild_id)
             if error_channel_id:
                 ch = message.guild.get_channel(error_channel_id)
@@ -130,6 +112,7 @@ class Translate(commands.Cog):
                     return data["translatedText"], data.get("detectedLanguage", "unknown")
         except Exception as e:
             print(f"⚠️ LibreTranslate failed: {e}, falling back to Google Translate")
+            # Fallback to Google
             try:
                 result = self.google_translator.translate(text, dest=target_lang)
                 return result.text, result.src
