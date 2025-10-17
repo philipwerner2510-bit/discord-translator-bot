@@ -5,7 +5,6 @@ from discord.ext import commands
 from utils import database
 
 BOT_COLOR = 0xde002a  # Bot role color
-TOTAL_TRANSLATIONS = 0  # Global counter, increment per translation if needed
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -15,6 +14,7 @@ intents.guilds = True
 intents.dm_messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+bot.total_translations = 0  # Initialize real-time translation counter
 
 # -----------------------------
 # Background task for rich presence
@@ -27,7 +27,7 @@ async def update_presence():
             await asyncio.sleep(300)
 
             # Show total translations today
-            await bot.change_presence(activity=discord.Game(name=f"{TOTAL_TRANSLATIONS} translations today | a silly bot"))
+            await bot.change_presence(activity=discord.Game(name=f"{getattr(bot, 'total_translations', 0)} translations today | a silly bot"))
             await asyncio.sleep(300)
 
         except Exception as e:
