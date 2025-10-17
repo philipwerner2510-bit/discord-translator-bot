@@ -60,14 +60,25 @@ class AdminCommands(commands.Cog):
     @app_commands.command(name="seterrorchannel", description="Define the error logging channel for your server.")
     async def seterrorchannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         try:
-            guild_id = interaction.guild.id
-            if not channel.permissions_for(interaction.guild.me).send_messages:
+            guild = interaction.guild
+            if not guild:
+                await interaction.response.send_message(
+                    "❌ This command can only be used in a server.", ephemeral=True
+                )
+                return
+
+            # Check bot permissions
+            bot_member = guild.me
+            perms = channel.permissions_for(bot_member)
+            if not perms.send_messages or not perms.view_channel:
                 await interaction.response.send_message(
                     f"❌ I cannot send messages in {channel.mention}. Choose another channel.", ephemeral=True
                 )
                 return
-            await database.set_error_channel(guild_id, channel.id)
+
+            await database.set_error_channel(guild.id, channel.id)
             await interaction.response.send_message(f"✅ Error channel set to {channel.mention}.", ephemeral=True)
+
         except Exception as e:
             await interaction.response.send_message(f"❌ Failed to set error channel: {e}", ephemeral=True)
 
