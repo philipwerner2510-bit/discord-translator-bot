@@ -13,20 +13,17 @@ CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")  # groups: animate
 
 def normalize_emote_input(emote_str: str) -> str:
     """Return canonical string that matches str(reaction.emoji)."""
-    # If user passed a plain unicode emoji, use it as-is.
-    # If user passed Discord custom emoji like <:name:id> or <a:name:id>, keep same string.
     return emote_str.strip()
 
 def reaction_emoji_to_string(emoji):
     """Return a comparable string for reaction.emoji (works for unicode and PartialEmoji)."""
-    # For unicode emoji, discord gives a str (e.g. "🔃")
-    # For custom emojis, str(PartialEmoji) returns "<:name:id>" (or "<a:name:id>")
     return str(emoji)
 
 class Translate(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.google_translator = GoogleTranslator()
+        self._translated_messages = set()  # Tracks (message.id, user.id) to prevent duplicate DMs
 
     # -----------------------
     # Slash command: /translate
@@ -57,7 +54,6 @@ class Translate(commands.Cog):
     # -----------------------
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Ignore bots & DMs
         if message.author.bot or message.guild is None:
             return
 
@@ -66,19 +62,17 @@ class Translate(commands.Cog):
         if not channel_ids or message.channel.id not in channel_ids:
             return
 
-        # Get configured emote (as stored string) or default
         bot_emote_raw = await database.get_bot_emote(guild_id)
-        bot_emote = bot_emote_raw or "🔃"
-        bot_emote = normalize_emote_input(bot_emote)
+        bot_emote = normalize_emote_input(bot_emote_raw or "🔃")
 
-        # Try to add reaction. Handle unicode first; if fails, try parse custom emoji.
+        # Try unicode first
         try:
             await message.add_reaction(bot_emote)
             return
         except Exception:
             pass
 
-        # Try to parse custom emoji like <:name:id> or <a:name:id>
+        # Try custom emoji
         m = CUSTOM_EMOJI_RE.match(bot_emote)
         if m:
             animated_flag, name, eid = m.groups()
@@ -87,11 +81,8 @@ class Translate(commands.Cog):
                 await message.add_reaction(partial)
                 return
             except Exception:
-                # fall through to logging
                 pass
 
-        # If we reached here, adding reaction failed (invalid emoji or missing perms)
-        # Log for debugging but don't crash
         print(f"⚠️ Could not add configured emote '{bot_emote}' in guild {guild_id}, channel {message.channel.id}")
 
     # -----------------------
@@ -103,7 +94,6 @@ class Translate(commands.Cog):
             return
 
         message = reaction.message
-        # Ignore DMs
         if message.guild is None:
             return
 
@@ -112,22 +102,28 @@ class Translate(commands.Cog):
         if not (channel_ids and message.channel.id in channel_ids):
             return
 
-        # Compare reaction emoji to configured emote (handle unicode & custom)
+        # Prevent sending duplicate DMs
+        key = (message.id, user.id)
+        if key in self._translated_messages:
+            return
+        self._translated_messages.add(key)
+
+        # Compare reaction emoji to configured emote
         bot_emote_raw = await database.get_bot_emote(guild_id) or "🔃"
         bot_emote = normalize_emote_input(bot_emote_raw)
+        reacted = reaction_emoji_to_string(reaction.emoji)
 
-        reacted = reaction_emoji_to_string(reaction.emoji)  # e.g. "🔃" or "<:name:id>"
-        if reacted != bot_emote:
-            return  # not our configured emote
+        # Normalize Unicode to prevent mismatches
+        import unicodedata
+        if unicodedata.normalize("NFC", reacted) != unicodedata.normalize("NFC", bot_emote):
+            return
 
-        # Now proceed with translation and single embed send
         try:
             user_lang = await database.get_user_lang(user.id)
             target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
 
             translated_text, detected = await self.translate_text(message.content or "", target_lang)
 
-            # Build embed (single embed only)
             embed = discord.Embed(
                 description=translated_text,
                 color=0xde002a
@@ -139,23 +135,17 @@ class Translate(commands.Cog):
             timestamp = message.created_at.strftime("%H:%M UTC")
             embed.set_footer(text=f"{timestamp} | Language: {target_lang} | Detected: {detected}")
 
-            # Original message hyperlink hidden behind "Original message"
             original_msg_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
-            # Append as hidden link text at end of description (keeps it compact)
-            embed.description = embed.description + f"\n[Original message]({original_msg_link})"
+            embed.description += f"\n[Original message]({original_msg_link})"
 
-            # Send DM with only the embed (one message)
             await user.send(embed=embed)
 
-            # Remove the reacting user's reaction (silent)
             try:
                 await reaction.remove(user)
             except Exception:
-                # ignore remove errors (missing perms)
                 pass
 
         except Exception as e:
-            # Send error embed to configured error channel with user + text
             err_ch_id = await database.get_error_channel(guild_id)
             if err_ch_id:
                 ch = message.guild.get_channel(err_ch_id)
@@ -166,14 +156,12 @@ class Translate(commands.Cog):
                     err_embed.add_field(name="Error", value=str(e), inline=False)
                     await ch.send(embed=err_embed)
                     return
-            # fallback to console
             print(f"[Translate error][Guild {guild_id}] User {user.id} - {e}")
 
     # -----------------------
     # Helper: Translate text with LibreTranslate, fallback to Google
     # -----------------------
     async def translate_text(self, text: str, target_lang: str):
-        # Try LibreTranslate first
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -187,10 +175,10 @@ class Translate(commands.Cog):
                     data = await resp.json()
                     return data.get("translatedText", ""), data.get("detectedLanguage", "unknown")
         except Exception as e:
-            # fallback to googletrans (local lib)
             print(f"⚠️ LibreTranslate failed: {e} — falling back to Google Translate")
             try:
-                result = self.google_translator.translate(text, dest=target_lang)
+                import asyncio
+                result = await asyncio.to_thread(self.google_translator.translate, text, dest=target_lang)
                 return result.text, result.src
             except Exception as ge:
                 raise Exception(f"Both translation services failed: {ge}") from ge
