@@ -1,10 +1,10 @@
 import os
 import asyncio
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from utils import database
-import itertools
-import datetime
+
+BOT_COLOR = 0xde002a  # Hex color for bot role
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -13,67 +13,49 @@ intents.reactions = True
 intents.guilds = True
 intents.dm_messages = True
 
-# -----------------------------
-# Custom Bot class with setup_hook
-# -----------------------------
-class MyBot(commands.Bot):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.translations_today = 0  # global counter
-
-    async def setup_hook(self):
-        # Schedule background tasks safely
-        self.loop.create_task(update_presence(self))
-        self.loop.create_task(reset_daily_translations(self))
-
-bot = MyBot(command_prefix="!", intents=intents)
-
-# -----------------------------
-# Background Tasks
-# -----------------------------
-async def update_presence(bot):
-    await bot.wait_until_ready()
-    activity_cycle = itertools.cycle(["servers", "translations"])
-    while not bot.is_closed():
-        try:
-            next_display = next(activity_cycle)
-            if next_display == "servers":
-                server_count = len(bot.guilds)
-                activity = discord.Game(name=f"Playing a silly bot 🎲 | {server_count} servers")
-            else:
-                translations = getattr(bot, "translations_today", 0)
-                activity = discord.Game(name=f"Playing a silly bot 🎲 | {translations} translations today")
-            await bot.change_presence(activity=activity)
-            await asyncio.sleep(300)  # switch every 5 minutes
-        except Exception as e:
-            print(f"Failed to update presence: {e}")
-            await asyncio.sleep(60)
-
-async def reset_daily_translations(bot):
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        now = datetime.datetime.utcnow()
-        next_midnight = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        seconds_until_midnight = (next_midnight - now).total_seconds()
-        await asyncio.sleep(seconds_until_midnight)
-        bot.translations_today = 0
-        print("✅ Reset translations_today counter for new UTC day")
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -----------------------------
 # Load all cogs async
 # -----------------------------
-async def main():
-    # Initialize database
-    await database.init_db()
+async def load_cogs():
+    for ext in ["cogs.user_commands", "cogs.admin_commands", "cogs.translate", "cogs.events"]:
+        try:
+            await bot.load_extension(ext)
+            print(f"✅ Loaded {ext}")
+        except Exception as e:
+            print(f"❌ Failed to load {ext}: {e}")
 
-    async with bot:
-        for ext in ["cogs.user_commands", "cogs.admin_commands", "cogs.translate", "cogs.events"]:
-            try:
-                await bot.load_extension(ext)
-                print(f"✅ Loaded {ext}")
-            except Exception as e:
-                print(f"❌ Failed to load {ext}: {e}")
-        await bot.start(os.environ["BOT_TOKEN"])
+# -----------------------------
+# Presence updater
+# -----------------------------
+async def update_presence():
+    while True:
+        try:
+            # Number of servers
+            await bot.change_presence(activity=discord.Game(name=f"on {len(bot.guilds)} servers | a silly bot"))
+            await asyncio.sleep(300)
+
+            # Total translations today (dummy example, replace with DB count if tracking)
+            # For now we'll simulate with 0
+            total_translations = 0
+            await bot.change_presence(activity=discord.Game(name=f"{total_translations} translations today | a silly bot"))
+            await asyncio.sleep(300)
+        except Exception as e:
+            print(f"⚠️ Presence update failed: {e}")
+            await asyncio.sleep(60)
+
+# -----------------------------
+# Main async startup
+# -----------------------------
+async def main():
+    await database.init_db()
+    await load_cogs()
+
+    # Start presence updater
+    bot.loop.create_task(update_presence())
+
+    await bot.start(os.environ["BOT_TOKEN"])
 
 # -----------------------------
 # Ready event
@@ -84,6 +66,18 @@ async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     print("Instance is healthy")
 
+    # Set bot role color in all guilds
+    for guild in bot.guilds:
+        bot_member = guild.me
+        if bot_member:
+            top_role = bot_member.top_role
+            if top_role.color.value != BOT_COLOR:
+                try:
+                    await top_role.edit(color=discord.Color(BOT_COLOR), reason="Set bot role color")
+                    print(f"🎨 Set bot role color in guild '{guild.name}'")
+                except Exception as e:
+                    print(f"⚠️ Failed to set bot role color in '{guild.name}': {e}")
+
 # -----------------------------
 # Test command
 # -----------------------------
@@ -91,5 +85,8 @@ async def on_ready():
 async def test(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Test command works!", ephemeral=True)
 
+# -----------------------------
+# Run the bot
+# -----------------------------
 if __name__ == "__main__":
     asyncio.run(main())
