@@ -5,7 +5,7 @@ from discord.ext import commands
 from utils import database
 
 BOT_COLOR = 0xde002a  # Bot role color
-TOTAL_TRANSLATIONS = 0  # Global counter, can be incremented per translation
+TOTAL_TRANSLATIONS = 0  # Global counter, increment per translation if needed
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -17,7 +17,7 @@ intents.dm_messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -----------------------------
-# Background tasks
+# Background task for rich presence
 # -----------------------------
 async def update_presence():
     while True:
@@ -51,8 +51,20 @@ async def load_cogs():
 async def setup_hook_override():
     await load_cogs()
 
-    # Start background tasks
-    bot.loop.create_task(update_presence())
+bot.setup_hook = setup_hook_override
+
+# -----------------------------
+# Ready event
+# -----------------------------
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"✅ Logged in as {bot.user}")
+    print("Instance is healthy")
+
+    # Start presence updater once
+    if not hasattr(bot, "_presence_task"):
+        bot._presence_task = asyncio.create_task(update_presence())
 
     # Set bot role color
     for guild in bot.guilds:
@@ -66,17 +78,6 @@ async def setup_hook_override():
                 except Exception as e:
                     print(f"⚠️ Failed to set bot role color in '{guild.name}': {e}")
 
-bot.setup_hook = setup_hook_override
-
-# -----------------------------
-# Ready event
-# -----------------------------
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f"✅ Logged in as {bot.user}")
-    print("Instance is healthy")
-
 # -----------------------------
 # Test command
 # -----------------------------
@@ -88,6 +89,7 @@ async def test(interaction: discord.Interaction):
 # Run the bot
 # -----------------------------
 if __name__ == "__main__":
-    # Initialize DB and start bot
+    # Initialize DB first
     asyncio.run(database.init_db())
+    # Start bot
     asyncio.run(bot.start(os.environ["BOT_TOKEN"]))
