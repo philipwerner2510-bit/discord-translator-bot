@@ -21,34 +21,23 @@ class Translate(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         try:
             translated_text, detected = await self.translate_text(text, target_lang)
+            timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
             embed = discord.Embed(
-                title="🌐 Translation",
                 description=translated_text,
                 color=0xde002a
             )
-            embed.set_footer(text=f"Detected language: {detected} | Translated to: {target_lang}")
+            embed.set_author(
+                name=interaction.user.display_name,
+                icon_url=interaction.user.display_avatar.url
+            )
+            embed.set_footer(text=f"Translated at {timestamp} | Language: {target_lang} | Detected: {detected}")
+            embed.add_field(name="\u200b", value=f"[Original message](https://discord.com/channels/{interaction.guild.id}/{interaction.channel.id}/{interaction.id})", inline=False)
+
             await interaction.followup.send(embed=embed)
+
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
-
-    # -----------------------
-    # Automatically add bot emote in translation channels
-    # -----------------------
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.author.bot or message.guild is None:
-            return
-
-        guild_id = message.guild.id
-        channel_ids = await database.get_translation_channels(guild_id)
-        if not channel_ids or message.channel.id not in channel_ids:
-            return
-
-        emote = await database.get_bot_emote(guild_id) or "🔃"
-        try:
-            await message.add_reaction(emote)
-        except discord.HTTPException:
-            pass  # ignore errors (invalid emoji, no permissions)
 
     # -----------------------
     # React-to-translate logic
@@ -60,20 +49,24 @@ class Translate(commands.Cog):
         message = reaction.message
         guild_id = message.guild.id if message.guild else None
         channel_ids = await database.get_translation_channels(guild_id)
+        if not (channel_ids and message.channel.id in channel_ids):
+            return
 
-        # Only proceed if reaction is in selected channel and matches bot emote
-        bot_emote = await database.get_bot_emote(guild_id) or "🔃"
-        if not (channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == bot_emote):
+        # Get configured bot emote
+        bot_emote = await database.get_bot_emote(guild_id)
+        if not bot_emote:
+            bot_emote = "🔃"
+
+        if str(reaction.emoji) != bot_emote:
             return
 
         try:
             user_lang = await database.get_user_lang(user.id)
             target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
 
-            # Translate with fallback
             translated_text, detected = await self.translate_text(message.content, target_lang)
+            timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
 
-            # Build embed
             embed = discord.Embed(
                 description=translated_text,
                 color=0xde002a
@@ -82,17 +75,14 @@ class Translate(commands.Cog):
                 name=message.author.display_name,
                 icon_url=message.author.display_avatar.url
             )
-            timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
             embed.set_footer(text=f"Translated at {timestamp} | Language: {target_lang} | Detected: {detected}")
-
-            # Send DM
-            user_dm = user.send(embed=embed)
-
-            # Original message link below embed
+            # Add original message hyperlink
             original_msg_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
-            await user.send(f"[Original message]({original_msg_link})")
+            embed.add_field(name="\u200b", value=f"[Original message]({original_msg_link})", inline=False)
 
-            # Remove user's reaction
+            await user.send(embed=embed)
+
+            # Remove the user's reaction
             await reaction.remove(user)
 
         except Exception as e:
