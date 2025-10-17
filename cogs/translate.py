@@ -32,27 +32,27 @@ class Translate(commands.Cog):
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
     # -----------------------
-    # React-to-translate logic
+    # Automatically add bot emote in translation channels
     # -----------------------
     @commands.Cog.listener()
     async def on_message(self, message):
-        # Skip bot messages
         if message.author.bot or message.guild is None:
             return
 
         guild_id = message.guild.id
         channel_ids = await database.get_translation_channels(guild_id)
-        if message.channel.id not in channel_ids:
+        if not channel_ids or message.channel.id not in channel_ids:
             return
 
-        # Fetch bot emote
         emote = await database.get_bot_emote(guild_id) or "🔃"
         try:
-            # Add reaction automatically
             await message.add_reaction(emote)
         except discord.HTTPException:
-            pass  # Ignore invalid emoji errors
+            pass  # ignore errors (invalid emoji, no permissions)
 
+    # -----------------------
+    # React-to-translate logic
+    # -----------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
         if user.bot:
@@ -60,21 +60,20 @@ class Translate(commands.Cog):
         message = reaction.message
         guild_id = message.guild.id if message.guild else None
         channel_ids = await database.get_translation_channels(guild_id)
-        if not channel_ids or message.channel.id not in channel_ids:
-            return
 
-        # Fetch correct emote
+        # Only proceed if reaction is in selected channel and matches bot emote
         bot_emote = await database.get_bot_emote(guild_id) or "🔃"
-        if str(reaction.emoji) != bot_emote:
+        if not (channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == bot_emote):
             return
 
         try:
             user_lang = await database.get_user_lang(user.id)
             target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
 
+            # Translate with fallback
             translated_text, detected = await self.translate_text(message.content, target_lang)
 
-            # Embed with author info
+            # Build embed
             embed = discord.Embed(
                 description=translated_text,
                 color=0xde002a
@@ -86,16 +85,17 @@ class Translate(commands.Cog):
             timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
             embed.set_footer(text=f"Translated at {timestamp} | Language: {target_lang} | Detected: {detected}")
 
-            # DM with only one embed + original message link underneath
+            # Send DM
+            user_dm = user.send(embed=embed)
+
+            # Original message link below embed
             original_msg_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
-            await user.send(embed=embed)
             await user.send(f"[Original message]({original_msg_link})")
 
-            # Remove user reaction
+            # Remove user's reaction
             await reaction.remove(user)
 
         except Exception as e:
-            # Send error in selected error channel
             error_channel_id = await database.get_error_channel(guild_id)
             if error_channel_id:
                 ch = message.guild.get_channel(error_channel_id)
@@ -115,7 +115,6 @@ class Translate(commands.Cog):
     # Helper: Translate text with LibreTranslate, fallback to Google
     # -----------------------
     async def translate_text(self, text: str, target_lang: str):
-        # Try LibreTranslate first
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -129,7 +128,6 @@ class Translate(commands.Cog):
                     return data["translatedText"], data.get("detectedLanguage", "unknown")
         except Exception as e:
             print(f"⚠️ LibreTranslate failed: {e}, falling back to Google Translate")
-            # Fallback to Google
             try:
                 result = self.google_translator.translate(text, dest=target_lang)
                 return result.text, result.src
