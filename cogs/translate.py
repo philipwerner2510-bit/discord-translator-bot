@@ -4,6 +4,7 @@ from discord import app_commands
 from utils import database
 import aiohttp
 from googletrans import Translator as GoogleTranslator
+from datetime import datetime
 
 LIBRE_URL = "https://libretranslate.de/translate"
 
@@ -34,25 +35,46 @@ class Translate(commands.Cog):
     # React-to-translate logic
     # -----------------------
     @commands.Cog.listener()
+    async def on_message(self, message):
+        # Skip bot messages
+        if message.author.bot or message.guild is None:
+            return
+
+        guild_id = message.guild.id
+        channel_ids = await database.get_translation_channels(guild_id)
+        if message.channel.id not in channel_ids:
+            return
+
+        # Fetch bot emote
+        emote = await database.get_bot_emote(guild_id) or "🔃"
+        try:
+            # Add reaction automatically
+            await message.add_reaction(emote)
+        except discord.HTTPException:
+            pass  # Ignore invalid emoji errors
+
+    @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
         if user.bot:
             return
         message = reaction.message
         guild_id = message.guild.id if message.guild else None
         channel_ids = await database.get_translation_channels(guild_id)
+        if not channel_ids or message.channel.id not in channel_ids:
+            return
 
-        # Only react if it's in a selected channel and emoji matches
-        if not (channel_ids and message.channel.id in channel_ids and str(reaction.emoji) == await database.get_bot_emote(guild_id) or "🔃"):
+        # Fetch correct emote
+        bot_emote = await database.get_bot_emote(guild_id) or "🔃"
+        if str(reaction.emoji) != bot_emote:
             return
 
         try:
             user_lang = await database.get_user_lang(user.id)
             target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
 
-            # Translate text (single attempt, fallback inside)
             translated_text, detected = await self.translate_text(message.content, target_lang)
 
-            # Build embed
+            # Embed with author info
             embed = discord.Embed(
                 description=translated_text,
                 color=0xde002a
@@ -64,14 +86,16 @@ class Translate(commands.Cog):
             timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
             embed.set_footer(text=f"Translated at {timestamp} | Language: {target_lang} | Detected: {detected}")
 
-            # Send DM once
+            # DM with only one embed + original message link underneath
             original_msg_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
             await user.send(embed=embed)
             await user.send(f"[Original message]({original_msg_link})")
 
+            # Remove user reaction
             await reaction.remove(user)
 
         except Exception as e:
+            # Send error in selected error channel
             error_channel_id = await database.get_error_channel(guild_id)
             if error_channel_id:
                 ch = message.guild.get_channel(error_channel_id)
