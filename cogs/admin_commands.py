@@ -27,24 +27,39 @@ class AdminCommands(commands.Cog):
                 await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
     # -----------------------
-    # Set translation channels
+    # Multi-select translation channels
     # -----------------------
     @app_commands.command(name="channelselection", description="Select channels where the bot reacts to messages for translation.")
-    async def channelselection(self, interaction: discord.Interaction, channels: str):
-        guild_id = interaction.guild.id if interaction.guild else None
-        if guild_id is None:
-            await interaction.response.send_message("❌ Cannot select channels outside a server.", ephemeral=True)
+    async def channelselection(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
             return
 
-        try:
-            channel_ids = [int(c.strip("<#> ")) for c in channels.split(",")]
-            await database.set_translation_channels(guild_id, channel_ids)
-            await interaction.response.send_message(f"✅ Translation channels set.", ephemeral=True)
-        except Exception as e:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
-            else:
-                await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+        options = [
+            discord.SelectOption(label=ch.name, value=str(ch.id))
+            for ch in guild.text_channels
+        ]
+
+        # Build dropdown menu
+        select = discord.ui.Select(
+            placeholder="Select translation channels...",
+            min_values=1,
+            max_values=len(options),
+            options=options
+        )
+
+        async def select_callback(select_interaction: discord.Interaction):
+            selected_ids = [int(val) for val in select.values]
+            await database.set_translation_channels(guild.id, selected_ids)
+            mentions = ", ".join(f"<#{id}>" for id in selected_ids)
+            await select_interaction.response.send_message(f"✅ Translation channels set: {mentions}", ephemeral=True)
+
+        select.callback = select_callback
+        view = discord.ui.View()
+        view.add_item(select)
+
+        await interaction.response.send_message("Select the channels for translation:", view=view, ephemeral=True)
 
     # -----------------------
     # Set error channel
