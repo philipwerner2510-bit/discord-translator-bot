@@ -1,15 +1,14 @@
-# cogs/admincommands.py
+# cogs/admin_commands.py
 import re
 import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import database
-import emoji  # pip install emoji
 
 # Regex for custom Discord emoji
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
 
-# List of supported language codes (used in translator)
+# List of supported language codes (top 30)
 SUPPORTED_LANGS = [
     "en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ja",
     "de", "jv", "ko", "vi", "mr", "ta", "ur", "tr", "it", "th",
@@ -71,7 +70,7 @@ class AdminCommands(commands.Cog):
         select = discord.ui.Select(
             placeholder="Select translation channels...",
             min_values=1,
-            max_values=min(len(options), 25),  # Discord max is 25
+            max_values=min(len(options), 25),
             options=options
         )
 
@@ -84,7 +83,7 @@ class AdminCommands(commands.Cog):
             )
 
         select.callback = select_callback
-        view = discord.ui.View(timeout=60)  # Auto-disable after 60 seconds
+        view = discord.ui.View(timeout=60)
         view.add_item(select)
 
         await interaction.response.send_message(
@@ -128,9 +127,9 @@ class AdminCommands(commands.Cog):
 
         emote = emote.strip()
 
-        # Validate: either a custom Discord emoji or a Unicode emoji (includes flags)
+        # Validate: either a custom Discord emoji or any non-empty string (Discord will reject invalid ones)
         is_custom = CUSTOM_EMOJI_RE.match(emote) is not None
-        is_unicode = emoji.is_emoji(emote)
+        is_unicode = len(emote) > 0
 
         if not (is_custom or is_unicode):
             await interaction.response.send_message(
@@ -155,9 +154,6 @@ class AdminCommands(commands.Cog):
     # -----------------------
     @app_commands.command(name="langlist", description="Show all supported translation languages with flags, codes, and names.")
     async def langlist(self, interaction: discord.Interaction):
-        """
-        Shows an embed listing the top 30 languages with flag emojis, language codes, and language names in 3 columns.
-        """
         # Mapping: language code -> (flag emoji, language name)
         lang_info = {
             "en": ("🇬🇧", "English"),
@@ -212,7 +208,6 @@ class AdminCommands(commands.Cog):
         )
         embed.set_footer(text=f"Total languages: {len(lang_info)}")
 
-        # Send to channel (visible to everyone)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
