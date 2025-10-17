@@ -4,13 +4,16 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import database
+import emoji  # pip install emoji
 
 # Regex for custom Discord emoji
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
 
-# List of supported language codes
+# List of supported language codes (used in translator)
 SUPPORTED_LANGS = [
-    "en", "de", "fr", "es", "it", "pt", "nl", "ru", "ja", "ko", "zh"
+    "en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ja",
+    "de", "jv", "ko", "vi", "mr", "ta", "ur", "tr", "it", "th",
+    "gu", "kn", "ml", "pa", "or", "fa", "sw", "am", "ha", "yo"
 ]
 
 class AdminCommands(commands.Cog):
@@ -124,10 +127,15 @@ class AdminCommands(commands.Cog):
             return
 
         emote = emote.strip()
-        # Validate emote: either 1 unicode character or custom Discord emoji
-        if not (len(emote) == 1 or CUSTOM_EMOJI_RE.match(emote)):
+
+        # Validate: either a custom Discord emoji or a Unicode emoji (includes flags)
+        is_custom = CUSTOM_EMOJI_RE.match(emote) is not None
+        is_unicode = emoji.is_emoji(emote)
+
+        if not (is_custom or is_unicode):
             await interaction.response.send_message(
-                "❌ Invalid emote. Use a single emoji or a custom server emoji like <:name:id>.", ephemeral=True
+                "❌ Invalid emote. Use a valid emoji (including flags) or custom server emoji like <:name:id>.", 
+                ephemeral=True
             )
             return
 
@@ -141,6 +149,72 @@ class AdminCommands(commands.Cog):
                 await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
             else:
                 await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+
+    # -----------------------
+    # List supported languages (top 30) with flag, code, and name
+    # -----------------------
+    @app_commands.command(name="langlist", description="Show all supported translation languages with flags, codes, and names.")
+    async def langlist(self, interaction: discord.Interaction):
+        """
+        Shows an embed listing the top 30 languages with flag emojis, language codes, and language names in 3 columns.
+        """
+        # Mapping: language code -> (flag emoji, language name)
+        lang_info = {
+            "en": ("🇬🇧", "English"),
+            "zh": ("🇨🇳", "Mandarin Chinese"),
+            "hi": ("🇮🇳", "Hindi"),
+            "es": ("🇪🇸", "Spanish"),
+            "fr": ("🇫🇷", "French"),
+            "ar": ("🇸🇦", "Arabic"),
+            "bn": ("🇧🇩", "Bengali"),
+            "pt": ("🇵🇹", "Portuguese"),
+            "ru": ("🇷🇺", "Russian"),
+            "ja": ("🇯🇵", "Japanese"),
+            "de": ("🇩🇪", "German"),
+            "jv": ("🇮🇩", "Javanese"),
+            "ko": ("🇰🇷", "Korean"),
+            "vi": ("🇻🇳", "Vietnamese"),
+            "mr": ("🇮🇳", "Marathi"),
+            "ta": ("🇮🇳", "Tamil"),
+            "ur": ("🇵🇰", "Urdu"),
+            "tr": ("🇹🇷", "Turkish"),
+            "it": ("🇮🇹", "Italian"),
+            "th": ("🇹🇭", "Thai"),
+            "gu": ("🇮🇳", "Gujarati"),
+            "kn": ("🇮🇳", "Kannada"),
+            "ml": ("🇮🇳", "Malayalam"),
+            "pa": ("🇮🇳", "Punjabi"),
+            "or": ("🇮🇳", "Odia"),
+            "fa": ("🇮🇷", "Persian"),
+            "sw": ("🇰🇪", "Swahili"),
+            "am": ("🇪🇹", "Amharic"),
+            "ha": ("🇳🇬", "Hausa"),
+            "yo": ("🇳🇬", "Yoruba"),
+        }
+
+        codes = list(lang_info.keys())
+        rows = []
+        for i in range(0, len(codes), 3):
+            row_items = []
+            for j in range(3):
+                if i + j < len(codes):
+                    code = codes[i + j]
+                    flag, name = lang_info[code]
+                    row_items.append(f"{flag} `{code}` {name}")
+            rows.append("   |   ".join(row_items))
+
+        table_text = "\n".join(rows)
+
+        embed = discord.Embed(
+            title="🌐 Translator Language Codes",
+            description=table_text,
+            color=0xde002a
+        )
+        embed.set_footer(text=f"Total languages: {len(lang_info)}")
+
+        # Send to channel (visible to everyone)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
 
 async def setup(bot):
     await bot.add_cog(AdminCommands(bot))
