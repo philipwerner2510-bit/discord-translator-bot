@@ -3,6 +3,8 @@ import asyncio
 import discord
 from discord.ext import commands
 from utils import database
+import itertools
+import datetime
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -35,10 +37,8 @@ async def main():
         await bot.start(os.environ["BOT_TOKEN"])
 
 # -----------------------------
-# Rich Presence
+# Dynamic Rich Presence (cycle every 5 minutes)
 # -----------------------------
-import itertools
-
 async def update_presence():
     await bot.wait_until_ready()
     activity_cycle = itertools.cycle(["servers", "translations"])  # alternate
@@ -61,6 +61,23 @@ async def update_presence():
             await asyncio.sleep(60)
 
 bot.loop.create_task(update_presence())
+
+# -----------------------------
+# Daily reset of translations counter at UTC midnight
+# -----------------------------
+async def reset_daily_translations():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = datetime.datetime.utcnow()
+        # Calculate seconds until next UTC midnight
+        next_midnight = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds_until_midnight = (next_midnight - now).total_seconds()
+        await asyncio.sleep(seconds_until_midnight)
+        # Reset counter
+        bot.translations_today = 0
+        print("✅ Reset translations_today counter for new UTC day")
+
+bot.loop.create_task(reset_daily_translations())
 
 # -----------------------------
 # Ready event
