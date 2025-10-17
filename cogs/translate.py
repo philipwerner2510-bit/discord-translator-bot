@@ -48,10 +48,6 @@ class Translate(commands.Cog):
             timestamp = datetime.utcnow().strftime("%H:%M UTC")
             embed.set_footer(text=f"Translated at {timestamp} | Language: {target_lang} | Detected: {detected}")
             await interaction.followup.send(embed=embed)
-
-            # Increment global translations counter
-            self.bot.translations_today += 1
-
         except Exception as e:
             await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
@@ -85,7 +81,7 @@ class Translate(commands.Cog):
                 print(f"⚠️ Could not add configured emote '{bot_emote}' in guild {guild_id}, channel {message.channel.id}")
 
     # -----------------------
-    # React-to-translate logic (single DM per user per message)
+    # React-to-translate logic
     # -----------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
@@ -98,7 +94,6 @@ class Translate(commands.Cog):
         if key in self.sent_translations:
             return  # already sent DM
         self.sent_translations.add(key)
-        # optional: clear key after 5 minutes
         asyncio.create_task(self.clear_sent(key, delay=300))
 
         message = reaction.message
@@ -128,8 +123,13 @@ class Translate(commands.Cog):
 
             await user.send(embed=embed)
 
-            # Increment global translations counter
-            self.bot.translations_today += 1
+            # -----------------------
+            # Increment global translation counter
+            # -----------------------
+            if hasattr(self.bot, "total_translations"):
+                self.bot.total_translations += 1
+            else:
+                self.bot.total_translations = 1
 
             try:
                 await reaction.remove(user)
@@ -137,7 +137,6 @@ class Translate(commands.Cog):
                 pass
 
         except Exception as e:
-            # Only log/send error if BOTH services fail
             err_ch_id = await database.get_error_channel(guild_id)
             if err_ch_id:
                 ch = message.guild.get_channel(err_ch_id)
