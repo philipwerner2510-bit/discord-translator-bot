@@ -6,6 +6,7 @@ from utils import database
 import aiohttp
 from googletrans import Translator as GoogleTranslator
 from datetime import datetime
+import asyncio
 
 LIBRE_URL = "https://libretranslate.de/translate"
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")  # animated, name, id
@@ -26,9 +27,10 @@ class Translate(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.google_translator = GoogleTranslator()
+        self.sent_translations = set()  # track (message_id, user_id) to prevent duplicates
 
     # -----------------------
-    # Manual /translate
+    # Manual /translate command
     # -----------------------
     @app_commands.guild_only()
     @app_commands.command(name="translate", description="Translate a specific text manually.")
@@ -79,12 +81,21 @@ class Translate(commands.Cog):
                 print(f"⚠️ Could not add configured emote '{bot_emote}' in guild {guild_id}, channel {message.channel.id}")
 
     # -----------------------
-    # React-to-translate logic (single DM)
+    # React-to-translate logic (single DM per user per message)
     # -----------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
         if user.bot or reaction.message.guild is None:
             return
+
+        msg_id = reaction.message.id
+        uid = user.id
+        key = (msg_id, uid)
+        if key in self.sent_translations:
+            return  # already sent DM
+        self.sent_translations.add(key)
+        # optional: clear key after 5 minutes
+        asyncio.create_task(self.clear_sent(key, delay=300))
 
         message = reaction.message
         guild_id = message.guild.id
@@ -103,10 +114,8 @@ class Translate(commands.Cog):
             if target_lang not in SUPPORTED_LANGS:
                 target_lang = "en"
 
-            # Try translating (Libre first, fallback to Google)
             translated_text, detected = await self.translate_text(message.content or "", target_lang)
 
-            # Send exactly one embed
             embed = discord.Embed(description=translated_text, color=0xde002a)
             embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
             timestamp = message.created_at.strftime("%H:%M UTC")
@@ -121,7 +130,7 @@ class Translate(commands.Cog):
                 pass
 
         except Exception as e:
-            # Only send error if BOTH services fail
+            # Only log/send error if BOTH services fail
             err_ch_id = await database.get_error_channel(guild_id)
             if err_ch_id:
                 ch = message.guild.get_channel(err_ch_id)
@@ -132,6 +141,13 @@ class Translate(commands.Cog):
                     err_embed.add_field(name="Error", value=str(e), inline=False)
                     await ch.send(embed=err_embed)
             print(f"[Translate error][Guild {guild_id}] User {user.id} - {e}")
+
+    # -----------------------
+    # Clear sent DM keys after delay
+    # -----------------------
+    async def clear_sent(self, key, delay: int):
+        await asyncio.sleep(delay)
+        self.sent_translations.discard(key)
 
     # -----------------------
     # Translate helper (Libre first, fallback Google)
@@ -156,7 +172,7 @@ class Translate(commands.Cog):
         except Exception as e:
             print(f"⚠️ LibreTranslate failed: {e} — falling back to Google Translate")
 
-        # Fallback to Google
+        # Fallback to Google Translate
         try:
             result = self.google_translator.translate(text, dest=target_lang)
             return result.text, result.src
