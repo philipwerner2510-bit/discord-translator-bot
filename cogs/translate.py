@@ -6,7 +6,7 @@ from discord import app_commands
 from utils import database
 import aiohttp
 from googletrans import Translator as GoogleTranslator
-from datetime import datetime
+from datetime import datetime, timedelta
 
 LIBRE_URL = "https://libretranslate.de/translate"
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")  # groups: animated, name, id
@@ -23,7 +23,8 @@ class Translate(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.google_translator = GoogleTranslator()
-        self._translated_messages = set()  # Tracks (message.id, user.id) to prevent duplicate DMs
+        # Store (message.id, user.id) -> timestamp
+        self._translated_messages = {}  
 
     # -----------------------
     # Slash command: /translate
@@ -86,7 +87,7 @@ class Translate(commands.Cog):
         print(f"⚠️ Could not add configured emote '{bot_emote}' in guild {guild_id}, channel {message.channel.id}")
 
     # -----------------------
-    # React-to-translate logic
+    # React-to-translate logic with time-based cache
     # -----------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
@@ -102,26 +103,34 @@ class Translate(commands.Cog):
         if not (channel_ids and message.channel.id in channel_ids):
             return
 
-        # Prevent sending duplicate DMs
+        # ---- Cleanup old cache entries ----
+        now = datetime.utcnow()
+        expiry = timedelta(hours=24)
+        self._translated_messages = {
+            k: t for k, t in self._translated_messages.items() if now - t < expiry
+        }
+
+        # ---- Prevent duplicate DMs ----
         key = (message.id, user.id)
         if key in self._translated_messages:
             return
-        self._translated_messages.add(key)
+        self._translated_messages[key] = now
 
-        # Compare reaction emoji to configured emote
+        # ---- Emoji check (Unicode/custom) ----
         bot_emote_raw = await database.get_bot_emote(guild_id) or "🔃"
         bot_emote = normalize_emote_input(bot_emote_raw)
         reacted = reaction_emoji_to_string(reaction.emoji)
-
-        # Normalize Unicode to prevent mismatches
         import unicodedata
         if unicodedata.normalize("NFC", reacted) != unicodedata.normalize("NFC", bot_emote):
             return
 
+        # ---- Translation logic ----
         try:
             user_lang = await database.get_user_lang(user.id)
             target_lang = user_lang or await database.get_server_lang(guild_id) or "en"
 
+            # Translate
+            import asyncio
             translated_text, detected = await self.translate_text(message.content or "", target_lang)
 
             embed = discord.Embed(
@@ -140,6 +149,7 @@ class Translate(commands.Cog):
 
             await user.send(embed=embed)
 
+            # Remove user's reaction silently
             try:
                 await reaction.remove(user)
             except Exception:
