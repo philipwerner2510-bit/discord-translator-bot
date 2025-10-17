@@ -1,4 +1,3 @@
-# cogs/translate.py
 import re
 import discord
 from discord.ext import commands
@@ -9,9 +8,9 @@ from googletrans import Translator as GoogleTranslator
 from datetime import datetime
 
 LIBRE_URL = "https://libretranslate.de/translate"
-CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")  # groups: animated, name, id
+CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")  # animated, name, id
 
-# List of supported language codes (matches /langlist)
+# List of supported language codes (top 30)
 SUPPORTED_LANGS = [
     "en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ja",
     "de", "jv", "ko", "vi", "mr", "ta", "ur", "tr", "it", "th",
@@ -19,11 +18,9 @@ SUPPORTED_LANGS = [
 ]
 
 def normalize_emote_input(emote_str: str) -> str:
-    """Return canonical string that matches str(reaction.emoji)."""
     return emote_str.strip()
 
 def reaction_emoji_to_string(emoji):
-    """Return a comparable string for reaction.emoji (works for unicode and PartialEmoji)."""
     return str(emoji)
 
 class Translate(commands.Cog):
@@ -34,6 +31,7 @@ class Translate(commands.Cog):
     # -----------------------
     # Slash command: /translate
     # -----------------------
+    @app_commands.guild_only()
     @app_commands.command(name="translate", description="Translate a specific text manually.")
     async def translate(self, interaction: discord.Interaction, text: str, target_lang: str):
         await interaction.response.defer(ephemeral=True)
@@ -46,14 +44,8 @@ class Translate(commands.Cog):
         try:
             translated_text, detected = await self.translate_text(text, target_lang)
 
-            embed = discord.Embed(
-                description=translated_text,
-                color=0xde002a
-            )
-            embed.set_author(
-                name=interaction.user.display_name,
-                icon_url=interaction.user.display_avatar.url
-            )
+            embed = discord.Embed(description=translated_text, color=0xde002a)
+            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
             timestamp = datetime.utcnow().strftime("%H:%M UTC")
             embed.set_footer(text=f"Translated at {timestamp} | Language: {target_lang} | Detected: {detected}")
 
@@ -100,13 +92,10 @@ class Translate(commands.Cog):
     # -----------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
-        if user.bot:
+        if user.bot or reaction.message.guild is None:
             return
 
         message = reaction.message
-        if message.guild is None:
-            return
-
         guild_id = message.guild.id
         channel_ids = await database.get_translation_channels(guild_id)
         if not (channel_ids and message.channel.id in channel_ids):
@@ -114,7 +103,6 @@ class Translate(commands.Cog):
 
         bot_emote_raw = await database.get_bot_emote(guild_id) or "🔃"
         bot_emote = normalize_emote_input(bot_emote_raw)
-
         reacted = reaction_emoji_to_string(reaction.emoji)
         if reacted != bot_emote:
             return
@@ -122,25 +110,16 @@ class Translate(commands.Cog):
         try:
             user_lang = await database.get_user_lang(user.id)
             target_lang = (user_lang or await database.get_server_lang(guild_id) or "en").lower()
-
             if target_lang not in SUPPORTED_LANGS:
                 target_lang = "en"
 
             translated_text, detected = await self.translate_text(message.content or "", target_lang)
 
-            embed = discord.Embed(
-                description=translated_text,
-                color=0xde002a
-            )
-            embed.set_author(
-                name=message.author.display_name,
-                icon_url=message.author.display_avatar.url
-            )
+            embed = discord.Embed(description=translated_text, color=0xde002a)
+            embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
             timestamp = message.created_at.strftime("%H:%M UTC")
             embed.set_footer(text=f"{timestamp} | Language: {target_lang} | Detected: {detected}")
-
-            original_msg_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
-            embed.description += f"\n[Original message]({original_msg_link})"
+            embed.description += f"\n[Original message](https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id})"
 
             await user.send(embed=embed)
 
@@ -163,7 +142,7 @@ class Translate(commands.Cog):
             print(f"[Translate error][Guild {guild_id}] User {user.id} - {e}")
 
     # -----------------------
-    # Helper: Translate text with LibreTranslate, fallback to Google
+    # Helper: Translate text
     # -----------------------
     async def translate_text(self, text: str, target_lang: str):
         if target_lang not in SUPPORTED_LANGS:
