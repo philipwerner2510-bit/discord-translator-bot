@@ -1,0 +1,21 @@
+{
+  "supported_languages": {
+    "en": {"name": "English", "flag": "🇬🇧"},
+    "zh": {"name": "Mandarin Chinese", "flag": "🇨🇳"},
+    "hi": {"name": "Hindi", "flag": "🇮🇳"},
+    "es": {"name": "Spanish", "flag": "🇪🇸"},
+    "fr": {"name": "French", "flag": "🇫🇷"},
+    "ar": {"name": "Arabic", "flag": "🇸🇦"},
+    "bn": {"name": "Bengali", "flag": "🇧🇩"},
+    "pt": {"name": "Portuguese", "flag": "🇵🇹"},
+    "ru": {"name": "Russian", "flag": "🇷🇺"},
+    "ja": {"name": "Japanese", "flag": "🇯🇵"},
+    "de": {"name": "German", "flag": "🇩🇪"},
+    "ko": {"name": "Korean", "flag": "🇰🇷"},
+    "vi": {"name": "Vietnamese", "flag": "🇻🇳"}
+  },
+  "reaction_timeout": 300,
+  "rate_limit": {
+    "translations_per_minute": 5
+  }
+}
