@@ -37,6 +37,12 @@ async def init_db():
             emote TEXT
         )
         """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS server_rate_limit(
+            guild_id INTEGER PRIMARY KEY,
+            translations_per_minute INTEGER
+        )
+        """)
         await db.commit()
 
 # -----------------------
@@ -129,5 +135,23 @@ async def set_bot_emote(guild_id: int, emote: str):
 async def get_bot_emote(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT emote FROM bot_emote WHERE guild_id=?", (guild_id,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+# -----------------------
+# Server rate limit
+# -----------------------
+async def set_server_rate_limit(guild_id: int, limit: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        INSERT INTO server_rate_limit(guild_id, translations_per_minute)
+        VALUES (?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET translations_per_minute=excluded.translations_per_minute
+        """, (guild_id, limit))
+        await db.commit()
+
+async def get_server_rate_limit(guild_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT translations_per_minute FROM server_rate_limit WHERE guild_id=?", (guild_id,)) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else None
