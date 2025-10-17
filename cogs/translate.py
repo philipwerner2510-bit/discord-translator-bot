@@ -137,7 +137,7 @@ class Translate(commands.Cog):
                 icon_url=message.author.display_avatar.url
             )
             timestamp = message.created_at.strftime("%H:%M UTC")
-            embed.set_footer(text=f"Translated at {timestamp} | Language: {target_lang} | Detected: {detected}")
+            embed.set_footer(text=f"{timestamp} | Language: {target_lang} | Detected: {detected}")
 
             # Original message hyperlink hidden behind "Original message"
             original_msg_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
