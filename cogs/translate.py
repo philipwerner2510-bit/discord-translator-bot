@@ -24,6 +24,18 @@ def chunk_list(seq, size):
         yield seq[i:i + size]
 
 
+def parse_partial_emoji(emote_str: str):
+    """Return PartialEmoji for custom mentions like <a:name:id>, else None."""
+    m = CUSTOM_EMOJI_RE.match(str(emote_str))
+    if not m:
+        return None
+    a, name, eid = m.groups()
+    try:
+        return discord.PartialEmoji(name=name, animated=bool(a), id=int(eid))
+    except Exception:
+        return None
+
+
 class Translate(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -87,13 +99,11 @@ class Translate(commands.Cog):
                 await message.add_reaction(em)
                 return True
             except Exception:
-                m = CUSTOM_EMOJI_RE.match(str(em))
-                if not m:
+                pe = parse_partial_emoji(em)
+                if not pe:
                     return False
-                a, name, eid = m.groups()
                 try:
-                    partial = discord.PartialEmoji(name=name, animated=bool(a), id=int(eid))
-                    await message.add_reaction(partial)
+                    await message.add_reaction(pe)
                     return True
                 except Exception:
                     return False
@@ -143,7 +153,7 @@ class Translate(commands.Cog):
         # If user already set a language, translate immediately (skip picker)
         user_lang = await database.get_user_lang(user.id)
         if user_lang and user_lang.lower() in SUPPORTED_LANGS:
-            await self.send_translation(msg, user, user_lang.lower())
+            await self.send_translation(msg, user, user_lang.lower(), configured)
             return
 
         # Otherwise prompt with a paginated picker (≤25 options per page)
@@ -172,13 +182,10 @@ class Translate(commands.Cog):
                 self._build()
 
             def _build(self):
-                # clear existing children before rebuilding (for page switches)
                 self.clear_items()
-
                 current_page = pages[self.page_idx]
                 placeholder = f"Choose language — Page {self.page_idx + 1}/{total_pages}"
 
-                # Select with up to 25 options
                 select = discord.ui.Select(
                     placeholder=placeholder,
                     min_values=1,
@@ -191,7 +198,6 @@ class Translate(commands.Cog):
                         return await interaction.response.defer()
                     lang = select.values[0]
                     await interaction.response.defer(ephemeral=True)
-                    # Save language for next time
                     try:
                         await database.set_user_lang(self.user.id, lang)
                     except Exception:
@@ -202,7 +208,6 @@ class Translate(commands.Cog):
                 select.callback = on_select
                 self.add_item(select)
 
-                # Prev/Next page buttons if multiple pages
                 if total_pages > 1:
                     @discord.ui.button(label="Prev", style=discord.ButtonStyle.secondary, disabled=self.page_idx == 0)
                     async def prev_btn(interaction: discord.Interaction, button: discord.ui.Button):
@@ -220,25 +225,22 @@ class Translate(commands.Cog):
                         self._build()
                         await interaction.response.edit_message(content=self._content_text(), view=self)
 
-                    # add the buttons we just defined
-                    # (discord.py registers them via decorators; we need to bind them)
-                    # The decorators already added them, so nothing else to do.
-
             def _content_text(self):
                 preview = (self.msg.content or "")[:60]
                 if len(self.msg.content or "") > 60:
                     preview += "…"
                 return f"Pick a translation language for:\n> {preview}"
 
+        tmp = LangView(self, msg, user)  # temp instance for content text
         await user.send(
-            content=LangView._content_text(LangView(self, msg, user)),  # call method statically with temp instance
+            content=tmp._content_text(),
             view=LangView(self, msg, user)
         )
 
     # --------------------------
-    # Perform + DM translation
+    # Perform + DM translation (+ cleanup reaction)
     # --------------------------
-    async def send_translation(self, msg: discord.Message, user: discord.User, target: str):
+    async def send_translation(self, msg: discord.Message, user: discord.User, target: str, configured_emote: str = None):
         text = msg.content or ""
         translated, detected = await self.do_translate(text, target)
 
@@ -255,13 +257,25 @@ class Translate(commands.Cog):
             except Exception:
                 pass
 
+        # Stats
         try:
             await database.increment_user_counter(user.id, 1)
             await database.increment_guild_counter(msg.guild.id, 1)
         except Exception as e:
             await log_error(self.bot, msg.guild.id, "Stats increment failed", e, admin_notify=False)
-
         self.bot.total_translations += 1
+
+        # Reaction cleanup (only if bot can manage messages)
+        try:
+            perms = msg.channel.permissions_for(msg.guild.me)
+            if perms.manage_messages:
+                if configured_emote is None:
+                    configured_emote = await database.get_bot_emote(msg.guild.id) or "🔃"
+                pe = parse_partial_emoji(configured_emote)
+                await msg.remove_reaction(pe or configured_emote, user)
+        except Exception:
+            # ignore cleanup failures silently
+            pass
 
     # --------------------------
     # Translation (cache + fallback)
