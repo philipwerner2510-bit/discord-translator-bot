@@ -4,6 +4,33 @@ from datetime import datetime, timezone
 
 DB_PATH = os.getenv("BOT_DB_PATH", "/mnt/data/bot_data.db")
 
+async def _ensure_migrations(db: aiosqlite.Connection):
+    # Add missing columns without breaking existing data
+    async with db.execute("PRAGMA table_info(ai_usage)") as cur:
+        cols = [r[1] for r in await cur.fetchall()]  # name is index 1
+    if cols:
+        if "eur" not in cols:
+            try:
+                await db.execute("ALTER TABLE ai_usage ADD COLUMN eur REAL NOT NULL DEFAULT 0.0")
+                await db.commit()
+            except Exception:
+                pass
+        if "tokens" not in cols:
+            try:
+                await db.execute("ALTER TABLE ai_usage ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0")
+                await db.commit()
+            except Exception:
+                pass
+
+    async with db.execute("PRAGMA table_info(guild_ai)") as cur:
+        cols = [r[1] for r in await cur.fetchall()]
+    if cols and "enabled" not in cols:
+        try:
+            await db.execute("ALTER TABLE guild_ai ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
+            await db.commit()
+        except Exception:
+            pass
+
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""CREATE TABLE IF NOT EXISTS user_lang(
@@ -24,7 +51,10 @@ async def init_db():
             guild_id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1)""")
         await db.commit()
 
-# ---------- helpers (cursor-style for aiosqlite compatibility) ----------
+        # 🔧 Run lightweight migrations to add any missing columns
+        await _ensure_migrations(db)
+
+# ---------- helpers (cursor-style) ----------
 async def set_user_lang(user_id: int, lang: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
