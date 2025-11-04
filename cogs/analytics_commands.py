@@ -1,32 +1,26 @@
-# cogs/analytics_commands.py
 import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import database
 
-class AnalyticsCommands(commands.Cog):
+BOT_COLOR = 0xDE002A
+
+class Analytics(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="mystats", description="Your translation count.")
-    async def mystats(self, interaction: discord.Interaction):
-        count = await database.get_user_count(interaction.user.id)
-        await interaction.response.send_message(f"📊 You translated `{count}` messages.", ephemeral=True)
-
-    @app_commands.command(name="leaderboard", description="Top translators globally.")
+    @app_commands.command(name="leaderboard", description="Top translators (all-time).")
     async def leaderboard(self, interaction: discord.Interaction):
-        data = await database.get_top_users(10)
-        if not data:
-            return await interaction.response.send_message("📭 No stats yet.", ephemeral=True)
-        desc = "\n".join([f"**<@{uid}>** — `{count}`" for uid, count in data])
-        embed = discord.Embed(title="🌍 Global Leaderboard", description=desc, color=0xDE002A)
+        rows = await database.top_translators(10)
+        if not rows:
+            return await interaction.response.send_message("No data yet. Translate something first!", ephemeral=True)
+        desc = []
+        for rank, (uid, count) in enumerate(rows, 1):
+            user = interaction.client.get_user(uid) or (await interaction.client.fetch_user(uid))
+            name = user.name if user else f"User {uid}"
+            desc.append(f"**{rank}.** {name} — **{count}**")
+        embed = discord.Embed(title="🏆 Top Translators", description="\n".join(desc), color=BOT_COLOR)
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.guild_only()
-    @app_commands.command(name="guildstats", description="Server translation stats.")
-    async def guildstats(self, interaction: discord.Interaction):
-        count = await database.get_guild_count(interaction.guild.id)
-        await interaction.response.send_message(f"📈 This server translated `{count}` messages.")
-
 async def setup(bot):
-    await bot.add_cog(AnalyticsCommands(bot))
+    await bot.add_cog(Analytics(bot))
