@@ -11,7 +11,7 @@ from googletrans import Translator as GoogleTranslator
 from utils import database
 from utils.cache import TranslationCache
 from utils.logging_utils import log_error
-from utils.config import SUPPORTED_LANGS
+from utils.config import SUPPORTED_LANGS, LANG_META, lang_label
 
 CACHE = TranslationCache(ttl=300)
 LIBRE_URL = "https://libretranslate.de/translate"
@@ -25,7 +25,6 @@ def chunk_list(seq, size):
 
 
 def parse_partial_emoji(emote_str: str):
-    """Return PartialEmoji for custom mentions like <a:name:id>, else None."""
     m = CUSTOM_EMOJI_RE.match(str(emote_str))
     if not m:
         return None
@@ -51,18 +50,19 @@ class Translate(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         target_lang = (target_lang or "").lower()
         if target_lang not in SUPPORTED_LANGS:
+            supported = ", ".join(SUPPORTED_LANGS)
             return await interaction.followup.send(
-                f"❌ Unsupported language `{target_lang}`. Supported: {', '.join(SUPPORTED_LANGS)}",
+                f"❌ Unsupported language `{target_lang}`.\nSupported: {supported}",
                 ephemeral=True
             )
         translated, detected = await self.do_translate(text, target_lang)
         emb = discord.Embed(description=translated, color=0xDE002A)
         emb.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
         emb.set_footer(text=f"Detected: {detected} | {datetime.utcnow():%H:%M UTC}")
-        await interaction.followup.send(embed=emb)
+        await interaction.followup.send(embed=emb, ephemeral=True)
 
     # --------------------------
-    # Add reaction automation
+    # Auto add reaction in selected channels (threads/forum friendly)
     # --------------------------
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -73,14 +73,14 @@ class Translate(commands.Cog):
         gid = guild.id
 
         parent = getattr(message.channel, "parent_id", None)
-        target_channel_id = parent or message.channel.id
+        route_channel_id = parent or message.channel.id
 
         try:
             allowed = await database.get_translation_channels(gid)
         except Exception as e:
             return await log_error(self.bot, gid, "DB error Channels", e, admin_notify=True)
 
-        if not allowed or target_channel_id not in allowed:
+        if not allowed or route_channel_id not in allowed:
             return
 
         me = guild.me
@@ -88,13 +88,13 @@ class Translate(commands.Cog):
         if not (perms.add_reactions and perms.read_message_history and perms.view_channel):
             return await log_error(
                 self.bot, gid,
-                f"Missing reaction perms in #{message.channel.name}",
+                f"Missing reaction perms in #{message.channel.name} (AddReactions/ReadHistory/ViewChannel)",
                 admin_notify=True
             )
 
         emote = await database.get_bot_emote(gid) or "🔃"
 
-        async def _try(em):
+        async def try_add(em):
             try:
                 await message.add_reaction(em)
                 return True
@@ -108,12 +108,12 @@ class Translate(commands.Cog):
                 except Exception:
                     return False
 
-        ok = await _try(emote)
+        ok = await try_add(emote)
         if not ok and emote != "🔃":
-            await _try("🔃")
+            await try_add("🔃")
 
     # --------------------------
-    # Reaction flow
+    # Reaction flow: translate or prompt picker
     # --------------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
@@ -124,8 +124,7 @@ class Translate(commands.Cog):
         if key in self.processing:
             return
         self.processing.add(key)
-
-        await asyncio.sleep(0.2)  # UX smoothing
+        await asyncio.sleep(0.1)
 
         try:
             await self.handle_reaction(reaction, user)
@@ -150,54 +149,68 @@ class Translate(commands.Cog):
         if str(reaction.emoji) != configured:
             return
 
-        # If user already set a language, translate immediately (skip picker)
+        # If user already has a language, translate immediately
         user_lang = await database.get_user_lang(user.id)
         if user_lang and user_lang.lower() in SUPPORTED_LANGS:
             await self.send_translation(msg, user, user_lang.lower(), configured)
             return
 
-        # Otherwise prompt with a paginated picker (≤25 options per page)
+        # Otherwise show a modern, paginated picker
         try:
             await self.prompt_language_choice(msg, user)
         except discord.Forbidden:
-            return await msg.channel.send(f"⚠️ I can’t DM {user.mention}. (Privacy settings)", delete_after=5)
+            return await msg.channel.send(f"⚠️ I can’t DM {user.mention}. (Privacy settings)", delete_after=6)
         except Exception as e:
             await log_error(self.bot, gid, "Prompt send failed", e, admin_notify=True)
 
     # --------------------------
-    # Paginated language picker
+    # Modern paginated language picker (flags + names)
     # --------------------------
     async def prompt_language_choice(self, msg: discord.Message, user: discord.User):
         PER_PAGE = 25
-        pages = list(chunk_list(SUPPORTED_LANGS, PER_PAGE))
+        codes_sorted = list(SUPPORTED_LANGS)
+        # stable, alphabetic by language name
+        codes_sorted.sort(key=lambda c: LANG_META.get(c, ("🌐", c.upper()))[1])
+        pages = list(chunk_list(codes_sorted, PER_PAGE))
         total_pages = len(pages)
 
         class LangView(discord.ui.View):
             def __init__(self, outer, message, requester, page_idx=0):
-                super().__init__(timeout=45)
+                super().__init__(timeout=60)
                 self.outer = outer
                 self.msg = message
                 self.user = requester
                 self.page_idx = page_idx
-                self._build()
+                self._rebuild()
 
-            def _build(self):
+            def _rebuild(self):
                 self.clear_items()
-                current_page = pages[self.page_idx]
+
+                current_codes = pages[self.page_idx]
                 placeholder = f"Choose language — Page {self.page_idx + 1}/{total_pages}"
+
+                # Build pretty options
+                options = [
+                    discord.SelectOption(
+                        label=lang_label(code)[:100],  # label limit
+                        value=code,
+                        description=f"Code: {code}"  # optional, ≤100 chars
+                    )
+                    for code in current_codes
+                ]
 
                 select = discord.ui.Select(
                     placeholder=placeholder,
                     min_values=1,
                     max_values=1,
-                    options=[discord.SelectOption(label=code, value=code) for code in current_page]
+                    options=options
                 )
 
-                async def on_select(interaction: discord.Interaction):
-                    if interaction.user.id != self.user.id:
-                        return await interaction.response.defer()
+                async def on_select(inter: discord.Interaction):
+                    if inter.user.id != self.user.id:
+                        return await inter.response.defer()
                     lang = select.values[0]
-                    await interaction.response.defer(ephemeral=True)
+                    await inter.response.defer(ephemeral=True)
                     try:
                         await database.set_user_lang(self.user.id, lang)
                     except Exception:
@@ -208,32 +221,36 @@ class Translate(commands.Cog):
                 select.callback = on_select
                 self.add_item(select)
 
+                # Pagination controls
                 if total_pages > 1:
-                    @discord.ui.button(label="Prev", style=discord.ButtonStyle.secondary, disabled=self.page_idx == 0)
-                    async def prev_btn(interaction: discord.Interaction, button: discord.ui.Button):
-                        if interaction.user.id != self.user.id:
-                            return await interaction.response.defer()
-                        self.page_idx -= 1
-                        self._build()
-                        await interaction.response.edit_message(content=self._content_text(), view=self)
+                    prev_disabled = self.page_idx == 0
+                    next_disabled = self.page_idx >= total_pages - 1
 
-                    @discord.ui.button(label="Next", style=discord.ButtonStyle.primary, disabled=self.page_idx >= total_pages - 1)
-                    async def next_btn(interaction: discord.Interaction, button: discord.ui.Button):
-                        if interaction.user.id != self.user.id:
-                            return await interaction.response.defer()
+                    @discord.ui.button(label="⬅ Previous", style=discord.ButtonStyle.secondary, disabled=prev_disabled)
+                    async def prev_btn(inter: discord.Interaction, button: discord.ui.Button):
+                        if inter.user.id != self.user.id:
+                            return await inter.response.defer()
+                        self.page_idx -= 1
+                        self._rebuild()
+                        await inter.response.edit_message(content=self._content_text(), view=self)
+
+                    @discord.ui.button(label="Next ➡", style=discord.ButtonStyle.primary, disabled=next_disabled)
+                    async def next_btn(inter: discord.Interaction, button: discord.ui.Button):
+                        if inter.user.id != self.user.id:
+                            return await inter.response.defer()
                         self.page_idx += 1
-                        self._build()
-                        await interaction.response.edit_message(content=self._content_text(), view=self)
+                        self._rebuild()
+                        await inter.response.edit_message(content=self._content_text(), view=self)
 
             def _content_text(self):
-                preview = (self.msg.content or "")[:60]
-                if len(self.msg.content or "") > 60:
-                    preview += "…"
+                preview = (self.msg.content or "").strip()
+                if len(preview) > 120:
+                    preview = preview[:117] + "…"
                 return f"Pick a translation language for:\n> {preview}"
 
-        tmp = LangView(self, msg, user)  # temp instance for content text
+        temp = LangView(self, msg, user)
         await user.send(
-            content=tmp._content_text(),
+            content=temp._content_text(),
             view=LangView(self, msg, user)
         )
 
@@ -244,10 +261,13 @@ class Translate(commands.Cog):
         text = msg.content or ""
         translated, detected = await self.do_translate(text, target)
 
+        flag, name = LANG_META.get(target, ("🌐", target.upper()))
+        title = f"{flag} {name} ({target})"
+
         emb = discord.Embed(description=translated, color=0xDE002A)
         emb.set_author(name=msg.author.display_name, icon_url=msg.author.display_avatar.url)
         emb.add_field(name="Original", value=f"[Jump to message]({msg.jump_url})", inline=False)
-        emb.set_footer(text=f"{msg.created_at:%H:%M UTC} | {target} | From: {detected}")
+        emb.set_footer(text=f"{msg.created_at:%H:%M UTC} | to {title} • from {detected}")
 
         try:
             await user.send(embed=emb)
@@ -265,7 +285,7 @@ class Translate(commands.Cog):
             await log_error(self.bot, msg.guild.id, "Stats increment failed", e, admin_notify=False)
         self.bot.total_translations += 1
 
-        # Reaction cleanup (only if bot can manage messages)
+        # Remove user's reaction if we can
         try:
             perms = msg.channel.permissions_for(msg.guild.me)
             if perms.manage_messages:
@@ -274,7 +294,6 @@ class Translate(commands.Cog):
                 pe = parse_partial_emoji(configured_emote)
                 await msg.remove_reaction(pe or configured_emote, user)
         except Exception:
-            # ignore cleanup failures silently
             pass
 
     # --------------------------
@@ -288,7 +307,7 @@ class Translate(commands.Cog):
         if cached:
             return cached[0], cached[1]
 
-        # Try Libre
+        # Try LibreTranslate first
         try:
             async with aiohttp.ClientSession() as s:
                 async with s.post(
