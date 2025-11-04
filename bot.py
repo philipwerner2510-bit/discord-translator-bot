@@ -34,12 +34,12 @@ bot.libre_translations = 0
 BOT_COLOR = 0xDE002A
 PRESENCE_INTERVAL = 300  # seconds
 
-# Optional: speed up testing by syncing to a specific guild first
+# Optional: speed up dev by syncing to a specific guild first (string ID)
 DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")  # e.g. "1425585153585189067"
 
 
 # -----------------------------
-# Slash commands (local to this file)
+# Local slash: /test
 # -----------------------------
 @bot.tree.command(name="test", description="Quick check that the bot is alive and commands are synced.")
 async def test_cmd(interaction: discord.Interaction):
@@ -77,9 +77,16 @@ async def run():
 # -----------------------------
 @bot.event
 async def on_ready():
+    # ✅ Dependency version check (OpenAI + httpx)
+    try:
+        import httpx, openai
+        print(f"✅ Dependencies: openai={openai.__version__} | httpx={httpx.__version__}")
+    except Exception as e:
+        print(f"⚠️ Dependency version check failed: {e}")
+
     bot.start_time = getattr(bot, "start_time", datetime.utcnow())
 
-    # Per-guild sync (dev) then global sync
+    # Per-guild dev sync (if provided), then global sync
     try:
         if DEV_GUILD_ID:
             gid = int(DEV_GUILD_ID)
@@ -122,7 +129,7 @@ async def daily_reset():
     while not bot.is_closed():
         now = datetime.utcnow()
         next_reset = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        await asyncio.sleep((next_reset - now).total_seconds())
+        await asyncio.sleep(max(1, (next_reset - now).total_seconds()))
         bot.total_translations = 0
         print("🔄 Daily translations counter reset")
 
