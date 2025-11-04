@@ -1,6 +1,6 @@
-# utils/database.py  (UPDATED)
+# utils/database.py
 import aiosqlite
-import os, json
+import os, json, pathlib
 import contextlib
 from typing import Optional, List
 
@@ -16,7 +16,6 @@ def _pragma_sql():
 
 @contextlib.asynccontextmanager
 async def _connect():
-    # shared cache helps when multiple connections exist
     uri = f"file:{DB_PATH}?cache=shared&mode=rwc"
     async with aiosqlite.connect(uri, uri=True, timeout=30.0) as db:
         for sql, args in _pragma_sql():
@@ -146,3 +145,17 @@ async def get_bot_emote(guild_id: int) -> Optional[str]:
         async with db.execute("SELECT emote FROM bot_emote WHERE guild_id=?", (guild_id,)) as cur:
             row = await cur.fetchone()
             return row[0] if row else None
+
+# Export (backup) DB to a file
+async def export_db(output_path: str) -> str:
+    """
+    Exports the current database to the given path using VACUUM INTO.
+    Returns the final path.
+    """
+    p = pathlib.Path(output_path).expanduser().resolve()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    async with _connect() as db:
+        # quote-single-escape the path for SQL
+        safe = str(p).replace("'", "''")
+        await db.execute(f"VACUUM INTO '{safe}';")
+    return str(p)
