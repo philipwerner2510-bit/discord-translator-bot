@@ -69,11 +69,7 @@ def embed_general(user_lang: str | None, server_lang: str | None):
         ),
         inline=False
     )
-    e.add_field(
-        name="/translate `<text>` `<lang>`",
-        value="Translate any text manually to a target language.",
-        inline=False
-    )
+    e.add_field(name="/translate `<text>` `<lang>`", value="Translate any text manually.", inline=False)
     e.add_field(name="/langlist", value="Show supported languages (flags + names + codes).", inline=False)
     e.add_field(name="/leaderboard", value="Top translators (global).", inline=False)
     e.add_field(name="/mystats", value="Your translation count in this server.", inline=False)
@@ -119,7 +115,6 @@ class UserCommands(commands.Cog):
     # /help (permission-aware tabs + dynamic info)
     @app_commands.command(name="help", description="Show help for Demon Translator.")
     async def help_cmd(self, interaction: discord.Interaction):
-        # Load user/server context for dynamic help
         user_lang = await database.get_user_lang(interaction.user.id)
         server_lang = await database.get_server_lang(interaction.guild.id) if interaction.guild else None
 
@@ -220,33 +215,6 @@ class UserCommands(commands.Cog):
         matches = [c for c in SUPPORTED_LANGS if cur in c or cur in LANG_META.get(c, ("", ""))[1].lower()]
         return [app_commands.Choice(name=lang_label(c)[:100], value=c) for c in matches[:25]]
 
-    # (Optional stub so users see /translate in help even if they try it here)
-    @app_commands.command(name="translate", description="Translate a specific text manually.")
-    async def translate_stub(self, interaction: discord.Interaction, text: str, lang: str):
-        await interaction.response.send_message(
-            "Heads up: use the main **/translate** command (enabled in this server).",
-            ephemeral=True
-        )
-
-    @app_commands.command(name="mystats", description="Your translation count.")
-    async def mystats(self, interaction: discord.Interaction):
-        count = await database.get_user_count(interaction.user.id)
-        await interaction.response.send_message(f"📊 You translated `{count}` messages.", ephemeral=True)
-
-    @app_commands.command(name="leaderboard", description="Top translators globally.")
-    async def leaderboard(self, interaction: discord.Interaction):
-        data = await database.get_top_users(10)
-        if not data:
-            return await interaction.response.send_message("📭 No stats yet.", ephemeral=True)
-        desc = "\n".join([f"**<@{uid}>** — `{count}`" for uid, count in data])
-        embed = discord.Embed(title="🌍 Global Leaderboard", description=desc, color=0xDE002A)
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.guild_only()
-    @app_commands.command(name="guildstats", description="Server translation stats.")
-    async def guildstats(self, interaction: discord.Interaction):
-        count = await database.get_guild_count(interaction.guild.id)
-        await interaction.response.send_message(f"📈 This server translated `{count}` messages.")
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
