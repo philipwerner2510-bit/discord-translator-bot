@@ -12,14 +12,18 @@ from utils import database
 from utils.logging_utils import log_error
 
 BOT_COLOR = 0xDE002A
-LIBRE_URL = os.getenv("LIBRE_URL", "https://libretranslate.de/translate")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-CACHE_TTL = 60 * 60 * 24
+# Use a BASE url and derive endpoints to avoid HTML landing-page issues.
+LIBRE_BASE = os.getenv("LIBRE_BASE", "https://translate.argosopentech.com")
+LIBRE_TRANSLATE_URL = f"{LIBRE_BASE.rstrip('/')}/translate"
+LIBRE_LANG_URL = f"{LIBRE_BASE.rstrip('/')}/languages"
+
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+CACHE_TTL = 60 * 60 * 24  # 24h
 AI_COST_CAP_EUR = 10.0
 AI_WARN_AT_EUR = 8.0
 
-# Big language catalog (50+). Any of these are accepted inputs.
+# ---- Language catalog (50+) ----
 LANG_CATALOG = [
     ("en","🇬🇧","English"), ("de","🇩🇪","German"), ("fr","🇫🇷","French"), ("es","🇪🇸","Spanish"),
     ("it","🇮🇹","Italian"), ("pt","🇵🇹","Portuguese"), ("ru","🇷🇺","Russian"), ("zh","🇨🇳","Chinese"),
@@ -40,11 +44,11 @@ LANG_CATALOG = [
 SUPPORTED_LANGS = {code for code,_,_ in LANG_CATALOG}
 LANG_LOOKUP = {code: (flag, name) for code, flag, name in LANG_CATALOG}
 
-# Libre works best for this subset; everything else will prefer AI.
+# Libre typically performs well on these; others prefer AI for quality.
 LIBRE_GOOD = {"en","de","fr","es","it","pt","ru","zh","ja","ko","tr","nl","sv","no","da","fi",
               "pl","cs","el","uk","ro","bg","he","ar","vi","th","id","ms"}
 
-# Slang/emoji heuristic
+# --- Slang / emoji heuristic to route to AI ---
 SLANG_WORDS = {
     "cap","no cap","bet","sus","lowkey","highkey","sigma","rizz","gyatt","gyat","sheesh",
     "skibidi","fanum","ohio","mid","copium","ratio","cope","based","cringe","drip","npc",
@@ -54,7 +58,7 @@ SLANG_WORDS = {
 EMOJI_REGEX = re.compile(r"[\U0001F1E6-\U0001F1FF\U0001F300-\U0001F6FF\U0001F900-\U0001FAFF\U00002700-\U000027BF]")
 CUSTOM_EMOJI_RE = re.compile(r"^<(a?):([a-zA-Z0-9_]+):(\d+)>$")
 
-# OpenAI (lazy)
+# --- OpenAI client (lazy) ---
 from openai import OpenAI
 _oai_client = None
 def get_oai_client():
@@ -86,7 +90,7 @@ def parse_custom_emoji(s: str):
     return (bool(animated_flag), name, int(eid))
 
 def emoji_matches(config_emote: str, reacted_emoji) -> bool:
-    # Always accept 🔁 as a safe fallback trigger
+    # Accept 🔁 always as fallback trigger
     if str(reacted_emoji) == "🔁":
         return True if CUSTOM_EMOJI_RE.match(config_emote or "") else (config_emote == "🔁")
     if not CUSTOM_EMOJI_RE.match(config_emote or ""):
@@ -99,22 +103,26 @@ def emoji_matches(config_emote: str, reacted_emoji) -> bool:
     except Exception:
         return False
 
+# ------------ Libre ------------
 async def libre_translate(text: str, target_lang: str) -> tuple[str | None, str]:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                LIBRE_URL,
+                LIBRE_TRANSLATE_URL,
                 json={"q": text, "source": "auto", "target": target_lang, "format": "text"},
-                headers={"Content-Type": "application/json"},
-                timeout=12,
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                timeout=15,
+                allow_redirects=True,
             ) as resp:
-                if resp.status != 200:
-                    return None, f"http_{resp.status}"
+                ctype = resp.headers.get("Content-Type", "")
+                if resp.status != 200 or "application/json" not in ctype:
+                    return None, f"bad_content:{resp.status}:{ctype}"
                 data = await resp.json()
                 return (data.get("translatedText") or None), "ok"
     except Exception as e:
         return None, f"exception:{type(e).__name__}"
 
+# ------------ OpenAI (fallback or primary) ------------
 async def openai_translate(text: str, target_lang: str) -> tuple[str | None, int, float, str]:
     client = get_oai_client()
     if not client:
@@ -135,13 +143,14 @@ async def openai_translate(text: str, target_lang: str) -> tuple[str | None, int
         resp = await asyncio.to_thread(_call)
         out = resp.choices[0].message.content.strip()
         tokens = (resp.usage.total_tokens if resp.usage and resp.usage.total_tokens else 0)
-        est_eur = tokens * 0.0000006
+        est_eur = tokens * 0.0000006  # rough estimate; adjust if you want
+        # Guard DB accounting — never block translation on this
         await database.add_ai_usage(tokens, est_eur)
         return out, tokens, est_eur, "ok"
     except Exception as e:
         return None, 0, 0.0, f"exception:{type(e).__name__}"
 
-# ---------- Autocomplete provider (must be async!) ----------
+# ---------- Autocomplete provider (async) ----------
 def _filter_lang_choices(current: str):
     q = (current or "").strip().lower()
     items = []
@@ -152,18 +161,28 @@ def _filter_lang_choices(current: str):
             items.append(app_commands.Choice(name=label[:100], value=code))
         if len(items) >= 25:
             break
-    return items or [app_commands.Choice(name=f"{LANG_CATALOG[i][1]} {LANG_CATALOG[i][2]} ({LANG_CATALOG[i][0]})"[:100],
-                                         value=LANG_CATALOG[i][0]) for i in range(min(25, len(LANG_CATALOG)))]
+    # If empty, show first page
+    if not items:
+        for code, flag, name in LANG_CATALOG[:25]:
+            items.append(app_commands.Choice(name=f"{flag} {name} ({code})"[:100], value=code))
+    return items
 
 async def autocomplete_target_lang(interaction: discord.Interaction, current: str):
     return _filter_lang_choices(current)
 
+# =====================================================
 class Translate(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._inflight = set()
+        # runtime counters
+        self.bot.total_translations = getattr(self.bot, "total_translations", 0)
+        self.bot.libre_translations = getattr(self.bot, "libre_translations", 0)
+        self.bot.ai_translations = getattr(self.bot, "ai_translations", 0)
+        self.bot.cache_hits = getattr(self.bot, "cache_hits", 0)
+        self.bot.cache_misses = getattr(self.bot, "cache_misses", 0)
 
-    # --- Slash: /translate with async autocomplete ---
+    # --- Slash: /translate ---
     @app_commands.autocomplete(target_lang=autocomplete_target_lang)
     @app_commands.command(name="translate", description="Translate text to a chosen language (with autocomplete).")
     @app_commands.describe(text="What should I translate?", target_lang="Pick a language (type to search)")
@@ -174,7 +193,6 @@ class Translate(commands.Cog):
         if target_lang not in SUPPORTED_LANGS:
             return await interaction.followup.send("❌ Unsupported language. Try picking from the list.", ephemeral=True)
 
-        # Cache first
         cached = await cache.get(text, target_lang)
         if cached:
             translated = cached
@@ -237,7 +255,13 @@ class Translate(commands.Cog):
         embed.set_author(name=f"→ {name} ({target_lang}) {flag}")
         await interaction.followup.send(embed=embed)
 
-    # ---------- React flow ----------
+        # per-user stat bump
+        try:
+            await database.inc_user_translation(interaction.user.id)
+        except Exception:
+            pass
+
+    # --- Add reaction on new messages in configured channels ---
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -266,12 +290,13 @@ class Translate(commands.Cog):
             except Exception as e:
                 await log_error(self.bot, gid, f"Could not add custom emote {emote} in #{message.channel.id}", e)
 
-        # Fallback to 🔁 if custom invalid or add failed
+        # Fallback to 🔁
         try:
             await message.add_reaction("🔁")
         except Exception as e:
             await log_error(self.bot, gid, f"Could not add reaction emote '{emote}' in #{message.channel.id}", e)
 
+    # --- Handle reaction translate ---
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
         if user.bot or not reaction.message.guild:
@@ -288,7 +313,7 @@ class Translate(commands.Cog):
             return
 
         key = (reaction.message.id, user.id)
-        if hasattr(self, "_inflight") and key in self._inflight:
+        if key in self._inflight:
             return
         self._inflight.add(key)
 
@@ -309,7 +334,6 @@ class Translate(commands.Cog):
         if not original.strip():
             return
 
-        # 1) Cache
         cached = await cache.get(original, target_lang)
         if cached:
             translated = cached
@@ -317,7 +341,6 @@ class Translate(commands.Cog):
             self.bot.cache_hits += 1
         else:
             self.bot.cache_misses += 1
-
             ai_enabled = await database.get_ai_enabled(msg.guild.id)
             force_ai = needs_ai(original)
             translated = None
@@ -325,9 +348,6 @@ class Translate(commands.Cog):
             libre_reason = "skipped"
             ai_reason = "skipped"
 
-            # Strategy:
-            # - If language is in LIBRE_GOOD and not clearly slangy → try Libre first
-            # - Else prefer AI (if enabled), then fall back to Libre
             prefer_libre = (target_lang in LIBRE_GOOD) and not force_ai
 
             if prefer_libre:
@@ -398,6 +418,12 @@ class Translate(commands.Cog):
 
         try:
             await reaction.remove(user)
+        except Exception:
+            pass
+
+        # bump per-user stat (the clicker gets credit)
+        try:
+            await database.inc_user_translation(user.id)
         except Exception:
             pass
 
