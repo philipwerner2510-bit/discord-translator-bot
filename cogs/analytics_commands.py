@@ -1,3 +1,4 @@
+# cogs/analytics_commands.py
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -14,12 +15,15 @@ class Analytics(commands.Cog):
         rows = await database.top_translators(10)
         if not rows:
             return await interaction.response.send_message("No data yet. Translate something first!", ephemeral=True)
-        desc = []
-        for rank, (uid, count) in enumerate(rows, 1):
-            user = interaction.client.get_user(uid) or (await interaction.client.fetch_user(uid))
-            name = user.name if user else f"User {uid}"
-            desc.append(f"**{rank}.** {name} — **{count}**")
-        embed = discord.Embed(title="🏆 Top Translators", description="\n".join(desc), color=BOT_COLOR)
+        lines = []
+        for i, (uid, count) in enumerate(rows, 1):
+            try:
+                user = interaction.client.get_user(uid) or (await interaction.client.fetch_user(uid))
+                uname = user.name if user else f"User {uid}"
+            except Exception:
+                uname = f"User {uid}"
+            lines.append(f"**{i}.** {uname} — **{count}**")
+        embed = discord.Embed(title="🏆 Top Translators", description="\n".join(lines), color=BOT_COLOR)
         await interaction.response.send_message(embed=embed)
 
 async def setup(bot):
