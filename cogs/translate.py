@@ -268,6 +268,7 @@ class Translate(commands.Cog):
             flag, name = LANG_LOOKUP.get(target_lang, ("🏳️", target_lang))
             embed = discord.Embed(description=translated, color=BOT_COLOR)
             embed.set_author(name=f"→ {name} ({target_lang}) {flag}")
+            # Slash command has no original message; send embed only (no button)
             await interaction.followup.send(embed=embed)
 
             try:
@@ -428,14 +429,22 @@ class Translate(commands.Cog):
         embed = discord.Embed(description=translated, color=BOT_COLOR)
         embed.set_author(name=msg.author.display_name, icon_url=msg.author.display_avatar.url)
         embed.set_footer(text=f"{msg.created_at.strftime('%H:%M UTC')} • → {target_lang}")
-        embed.description += f"\n[View original]({msg.jump_url})"
+
+        # 🔗 Option C: Button linking to the original message (no text in embed body)
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(
+            label="View Original",
+            url=msg.jump_url,
+            style=discord.ButtonStyle.link,
+            emoji="🔗"
+        ))
 
         try:
-            await user.send(embed=embed)
+            await user.send(embed=embed, view=view)
         except Exception as e:
             await log_error(self.bot, msg.guild.id, f"DM to user {user.id} failed; replying in channel.", e)
             try:
-                await msg.reply(embed=embed, mention_author=False)
+                await msg.reply(embed=embed, view=view, mention_author=False)
             except Exception as e2:
                 await log_error(self.bot, msg.guild.id, "Channel reply failed after DM fail.", e2)
 
