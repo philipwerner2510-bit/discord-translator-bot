@@ -1,5 +1,6 @@
 # cogs/user_commands.py
 import os
+import math
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -7,23 +8,31 @@ from discord import app_commands
 BOT_COLOR = 0xDE002A
 OWNER_ID = 762267166031609858  # Polarix1954
 
-# Keep the list <= 25 for a single select menu
-LANGS = {
-    "en": ("🇬🇧", "English"),
-    "de": ("🇩🇪", "German"),
-    "es": ("🇪🇸", "Spanish"),
-    "fr": ("🇫🇷", "French"),
-    "it": ("🇮🇹", "Italian"),
-    "ja": ("🇯🇵", "Japanese"),
-    "ko": ("🇰🇷", "Korean"),
-    "zh": ("🇨🇳", "Chinese"),
-}
+# === 50+ Global Languages (code -> (flag, name)) ===
+LANG_CATALOG = [
+    ("en","🇬🇧","English"), ("de","🇩🇪","German"), ("fr","🇫🇷","French"), ("es","🇪🇸","Spanish"),
+    ("it","🇮🇹","Italian"), ("pt","🇵🇹","Portuguese"), ("ru","🇷🇺","Russian"), ("zh","🇨🇳","Chinese"),
+    ("ja","🇯🇵","Japanese"), ("ko","🇰🇷","Korean"), ("ar","🇸🇦","Arabic"), ("tr","🇹🇷","Turkish"),
+    ("nl","🇳🇱","Dutch"), ("sv","🇸🇪","Swedish"), ("no","🇳🇴","Norwegian"), ("da","🇩🇰","Danish"),
+    ("fi","🇫🇮","Finnish"), ("pl","🇵🇱","Polish"), ("cs","🇨🇿","Czech"), ("sk","🇸🇰","Slovak"),
+    ("hu","🇭🇺","Hungarian"), ("ro","🇷🇴","Romanian"), ("bg","🇧🇬","Bulgarian"), ("el","🇬🇷","Greek"),
+    ("uk","🇺🇦","Ukrainian"), ("he","🇮🇱","Hebrew"), ("hi","🇮🇳","Hindi"), ("bn","🇧🇩","Bengali"),
+    ("ta","🇮🇳","Tamil"), ("te","🇮🇳","Telugu"), ("mr","🇮🇳","Marathi"), ("gu","🇮🇳","Gujarati"),
+    ("pa","🇮🇳","Punjabi"), ("ur","🇵🇰","Urdu"), ("vi","🇻🇳","Vietnamese"), ("th","🇹🇭","Thai"),
+    ("id","🇮🇩","Indonesian"), ("ms","🇲🇾","Malay"), ("fa","🇮🇷","Persian"), ("sw","🇰🇪","Swahili"),
+    ("am","🇪🇹","Amharic"), ("yo","🇳🇬","Yoruba"), ("ha","🇳🇬","Hausa"), ("az","🇦🇿","Azerbaijani"),
+    ("ka","🇬🇪","Georgian"), ("et","🇪🇪","Estonian"), ("lv","🇱🇻","Latvian"), ("lt","🇱🇹","Lithuanian"),
+    ("sr","🇷🇸","Serbian"), ("hr","🇭🇷","Croatian"), ("sl","🇸🇮","Slovenian"), ("ga","🇮🇪","Irish"),
+    ("is","🇮🇸","Icelandic"), ("mt","🇲🇹","Maltese"), ("af","🇿🇦","Afrikaans"), ("zu","🇿🇦","Zulu"),
+    ("xh","🇿🇦","Xhosa"), ("fil","🇵🇭","Filipino"),
+]
+LANG_INDEX = {code:(flag,name) for code,flag,name in LANG_CATALOG}
 
 def build_invite_url(app_id: int) -> str:
     perms = 274878188544
     return f"https://discord.com/oauth2/authorize?client_id={app_id}&permissions={perms}&scope=bot%20applications.commands"
 
-# Optional: lazy OpenAI client for /aitest
+# ---------- Optional: lazy OpenAI client for /aitest ----------
 from openai import OpenAI
 _oai_client = None
 def get_oai_client():
@@ -39,7 +48,7 @@ def get_oai_client():
     return _oai_client
 
 
-# ---------- Embeds ----------
+# ---------- Embeds (polished & structured) ----------
 def embed_user() -> discord.Embed:
     e = discord.Embed(
         title="👋 Demon Translator — User Guide",
@@ -54,9 +63,9 @@ def embed_user() -> discord.Embed:
     e.add_field(
         name="Commands (Users)",
         value=(
-            "• `/setmylang` — choose your language (dropdown)\n"
+            "• `/setmylang` — choose your language (dropdown w/ pages)\n"
             "• `/translate <text>` — translate custom text\n"
-            "• `/langlist` — list of language codes\n"
+            "• `/langlist` — list of top language codes\n"
             "• `/ping` — latency check\n"
             "• `/help` — open this menu\n"
             "• `/guide` — public guide embed (admins send it)"
@@ -75,7 +84,6 @@ def embed_user() -> discord.Embed:
     e.set_footer(text="Demon Translator © by Polarix1954 😈🔥")
     return e
 
-
 def embed_admin() -> discord.Embed:
     e = discord.Embed(
         title="🛠️ Demon Translator — Admin Panel",
@@ -86,7 +94,7 @@ def embed_admin() -> discord.Embed:
         name="Setup",
         value=(
             "• `/channelselection` — choose channels for reaction-to-translate\n"
-            "• `/defaultlang` — set server default language (dropdown)\n"
+            "• `/defaultlang` — set server default language (dropdown w/ pages)\n"
             "• `/emote <emote>` — set the reaction emote the bot listens for\n"
             "• `/seterrorchannel #channel` — receive warnings & errors"
         ),
@@ -114,7 +122,6 @@ def embed_admin() -> discord.Embed:
     e.set_footer(text="Admins only • Use /settings for quick checks.")
     return e
 
-
 def embed_owner() -> discord.Embed:
     e = discord.Embed(
         title="👑 Demon Translator — Owner Tools",
@@ -130,70 +137,108 @@ def embed_owner() -> discord.Embed:
         ),
         inline=False,
     )
-    e.add_field(
-        name="Notes",
-        value="Owner tab is only visible to you.",
-        inline=False,
-    )
     e.set_footer(text="Owner: Polarix1954")
     return e
 
 
-# ---------- Views ----------
-class LanguageSelect(discord.ui.Select):
-    def __init__(self, placeholder: str):
-        opts = []
-        for code, (flag, name) in LANGS.items():
-            label = f"{flag} {name}"
-            opts.append(discord.SelectOption(label=label, value=code, description=f"{name} ({code})"))
+# ---------- Paginated Language Select ----------
+MAX_OPTIONS = 25
 
-        super().__init__(
-            placeholder=placeholder,
-            min_values=1,
-            max_values=1,
-            options=opts
-        )
+def page_count(items: list) -> int:
+    return max(1, math.ceil(len(items) / MAX_OPTIONS))
 
-class SetMyLangView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=120)
+def slice_page(items: list, page: int) -> list:
+    start = page * MAX_OPTIONS
+    end = start + MAX_OPTIONS
+    return items[start:end]
+
+class LangSelect(discord.ui.Select):
+    def __init__(self, page_items: list[tuple[str,str,str]], placeholder: str):
+        options = []
+        for code, flag, name in page_items:
+            options.append(discord.SelectOption(
+                label=f"{flag} {name}",
+                value=code,
+                description=f"{name} ({code})"
+            ))
+        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=options)
+
+class LangPager(discord.ui.View):
+    def __init__(self, user_id: int, mode: str, guild_id: int | None):
+        """
+        mode: 'user' or 'server'
+        if mode == 'server', only admins can set
+        """
+        super().__init__(timeout=180)
+        self._items = LANG_CATALOG
+        self.pages = page_count(self._items)
+        self.page = 0
         self.user_id = user_id
-        select = LanguageSelect("Choose your language…")
-        select.callback = self._on_select
+        self.mode = mode
+        self.guild_id = guild_id
+        self._refresh_select()
+
+        # Nav buttons
+        self.add_item(self.PrevButton(self))
+        self.add_item(self.NextButton(self))
+
+    def _refresh_select(self):
+        # Remove any previous selects
+        for child in list(self.children):
+            if isinstance(child, LangSelect):
+                self.remove_item(child)
+
+        # Add current page select
+        items = slice_page(self._items, self.page)
+        placeholder = "Choose your language…" if self.mode == "user" else "Choose the server default language…"
+        select = LangSelect(items, placeholder)
+        select.callback = self.on_pick
         self.add_item(select)
 
-    async def _on_select(self, interaction: discord.Interaction):
-        # Only the original user can use the selector
+    async def on_pick(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ This menu isn’t for you.", ephemeral=True)
 
         code = interaction.data["values"][0]
-        from utils import database
-        await database.set_user_lang(interaction.user.id, code)
-        await interaction.response.edit_message(
-            content=f"✅ Your personal language is now **{LANGS[code][1]}** (`{code}`).",
-            embed=None, view=None
-        )
+        flag, name = LANG_INDEX.get(code, ("🏳️","Unknown"))
+        if self.mode == "user":
+            from utils import database
+            await database.set_user_lang(interaction.user.id, code)
+            await interaction.response.edit_message(
+                content=f"✅ Your personal language is now **{name}** (`{code}`).",
+                embed=None, view=None
+            )
+        else:
+            if not interaction.user.guild_permissions.administrator:
+                return await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+            from utils import database
+            await database.set_server_lang(interaction.guild.id, code)
+            await interaction.response.edit_message(
+                content=f"✅ Server default language is now **{name}** (`{code}`).",
+                embed=None, view=None
+            )
 
-class DefaultLangView(discord.ui.View):
-    def __init__(self, guild_id: int, requester_id: int):
-        super().__init__(timeout=120)
-        self.guild_id = guild_id
-        self.requester_id = requester_id
-        select = LanguageSelect("Choose the server’s default language…")
-        select.callback = self._on_select
-        self.add_item(select)
+    class PrevButton(discord.ui.Button):
+        def __init__(self, pager: "LangPager"):
+            super().__init__(style=discord.ButtonStyle.secondary, label="◀ Prev")
+            self.pager = pager
+        async def callback(self, interaction: discord.Interaction):
+            if interaction.user.id != self.pager.user_id:
+                return await interaction.response.send_message("❌ This menu isn’t for you.", ephemeral=True)
+            self.pager.page = (self.pager.page - 1) % self.pager.pages
+            self.pager._refresh_select()
+            await interaction.response.edit_message(view=self.pager)
 
-    async def _on_select(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Admins only.", ephemeral=True)
-        code = interaction.data["values"][0]
-        from utils import database
-        await database.set_server_lang(interaction.guild.id, code)
-        await interaction.response.edit_message(
-            content=f"✅ Server default language is now **{LANGS[code][1]}** (`{code}`).",
-            embed=None, view=None
-        )
+    class NextButton(discord.ui.Button):
+        def __init__(self, pager: "LangPager"):
+            super().__init__(style=discord.ButtonStyle.secondary, label="Next ▶")
+            self.pager = pager
+        async def callback(self, interaction: discord.Interaction):
+            if interaction.user.id != self.pager.user_id:
+                return await interaction.response.send_message("❌ This menu isn’t for you.", ephemeral=True)
+            self.pager.page = (self.pager.page + 1) % self.pager.pages
+            self.pager._refresh_select()
+            await interaction.response.edit_message(view=self.pager)
 
 
 # ---------- Help View (User/Admin/Owner tabs) ----------
@@ -242,7 +287,7 @@ class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # /help — tabbed view
+    # /help — Tabbed view
     @app_commands.command(name="help", description="Interactive help: User, Admin, and Owner tabs.")
     async def help_cmd(self, interaction: discord.Interaction):
         app_id = self.bot.user.id if self.bot.user else 0
@@ -258,20 +303,26 @@ class UserCommands(commands.Cog):
     async def ping_cmd(self, interaction: discord.Interaction):
         await interaction.response.send_message(f"🏓 Pong! {round(self.bot.latency * 1000)}ms", ephemeral=True)
 
-    # /setmylang — dropdown (users)
+    # /setmylang — paginated dropdown
     @app_commands.command(name="setmylang", description="Choose your personal translation language.")
     async def setmylang(self, interaction: discord.Interaction):
-        view = SetMyLangView(interaction.user.id)
-        await interaction.response.send_message("Pick your language:", view=view, ephemeral=True)
+        await interaction.response.send_message(
+            "Pick your language:",
+            view=LangPager(user_id=interaction.user.id, mode="user", guild_id=None),
+            ephemeral=True
+        )
 
-    # /defaultlang — dropdown (admins)
+    # /defaultlang — paginated dropdown (admins)
     @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.command(name="defaultlang", description="Set the server default translation language (dropdown).")
+    @app_commands.command(name="defaultlang", description="Set the server default translation language.")
     async def defaultlang(self, interaction: discord.Interaction):
-        view = DefaultLangView(interaction.guild.id, interaction.user.id)
-        await interaction.response.send_message("Pick the **server default language**:", view=view, ephemeral=True)
+        await interaction.response.send_message(
+            "Pick the **server default language**:",
+            view=LangPager(user_id=interaction.user.id, mode="server", guild_id=interaction.guild.id),
+            ephemeral=True
+        )
 
-    # /aitest — owner only (unchanged)
+    # /aitest — owner only
     @app_commands.command(name="aitest", description="Owner-only: quick translation demo.")
     async def aitest_cmd(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_ID:
@@ -289,7 +340,7 @@ class UserCommands(commands.Cog):
             resp = await interaction.client.loop.run_in_executor(
                 None,
                 lambda: client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
                     messages=[
                         {"role": "system",
                          "content": f"Translate the user's message to '{target_lang}'. "
