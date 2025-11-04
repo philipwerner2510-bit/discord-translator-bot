@@ -1,16 +1,21 @@
+# cogs/admin_commands.py
 import re
 import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import database
-from utils.config import SUPPORTED_LANGS
+from utils.config import SUPPORTED_LANGS, LANG_META, lang_label
 
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
+
 
 class AdminCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    # -----------------------
+    # /defaultlang
+    # -----------------------
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.command(name="defaultlang", description="Set the server default translation language.")
@@ -18,7 +23,8 @@ class AdminCommands(commands.Cog):
         lang = lang.lower()
         if lang not in SUPPORTED_LANGS:
             return await interaction.response.send_message(
-                f"❌ Invalid language. Supported: {', '.join(SUPPORTED_LANGS)}", ephemeral=True)
+                f"❌ Invalid language. Supported: {', '.join(SUPPORTED_LANGS)}", ephemeral=True
+            )
         await database.set_server_lang(interaction.guild.id, lang)
         await interaction.response.send_message(f"✅ Server default language set to `{lang}`.", ephemeral=True)
 
@@ -30,6 +36,9 @@ class AdminCommands(commands.Cog):
             for c in SUPPORTED_LANGS if current in c
         ][:25]
 
+    # -----------------------
+    # /channelselection
+    # -----------------------
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.command(name="channelselection", description="Select channels for auto-translate reaction.")
@@ -54,6 +63,9 @@ class AdminCommands(commands.Cog):
         view.add_item(select)
         await interaction.response.send_message("Choose channels:", view=view, ephemeral=True)
 
+    # -----------------------
+    # /seterrorchannel
+    # -----------------------
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.command(name="seterrorchannel", description="Set or remove error logging channel.")
@@ -78,13 +90,19 @@ class AdminCommands(commands.Cog):
         await database.set_error_channel(gid, ch.id)
         await interaction.response.send_message(f"✅ Error channel set to {ch.mention}", ephemeral=True)
 
+    # -----------------------
+    # /emote
+    # -----------------------
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
-    @app_commands.command(name="emote", description="Set emoji bot reacts to.")
+    @app_commands.command(name="emote", description="Set emoji the bot listens for (unicode or custom).")
     async def emote(self, interaction: discord.Interaction, emote: str):
         await database.set_bot_emote(interaction.guild.id, emote)
         await interaction.response.send_message(f"✅ Set bot reaction emote to {emote}", ephemeral=True)
 
+    # -----------------------
+    # /settings
+    # -----------------------
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.command(name="settings", description="Show current bot settings for server.")
@@ -103,11 +121,34 @@ class AdminCommands(commands.Cog):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="langlist", description="Show supported language codes.")
+    # -----------------------
+    # /langlist  (pretty grid with flags + names)
+    # -----------------------
+    @app_commands.command(name="langlist", description="Show supported languages (flags + names + codes).")
     async def langlist(self, interaction: discord.Interaction):
-        embed = discord.Embed(title="🌍 Supported Languages", description=", ".join(SUPPORTED_LANGS), color=0xDE002A)
+        # Sort alphabetically by language name for readability
+        codes_sorted = sorted(
+            SUPPORTED_LANGS,
+            key=lambda c: LANG_META.get(c, ("🌐", c.upper()))[1]
+        )
+
+        # Build 3-column grid
+        rows = []
+        for i in range(0, len(codes_sorted), 3):
+            chunk = codes_sorted[i:i+3]
+            cells = [lang_label(code) for code in chunk]
+            rows.append("   |   ".join(cells))
+
+        desc = "\n".join(rows)
+        embed = discord.Embed(
+            title="🌍 Supported Languages",
+            description=desc if desc else "No languages configured.",
+            color=0xDE002A
+        )
         embed.set_footer(text=f"Total: {len(SUPPORTED_LANGS)}")
-        await interaction.response.send_message(embed=embed)
+
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
 
 async def setup(bot):
     await bot.add_cog(AdminCommands(bot))
