@@ -30,12 +30,20 @@ bot.cache_misses = 0
 bot.ai_translations = 0
 bot.libre_translations = 0
 
-# color & presence refresh
+# Color & presence
 BOT_COLOR = 0xDE002A
 PRESENCE_INTERVAL = 300  # seconds
 
-# Optional: set this to a test guild ID for faster per-guild sync in dev
+# Optional: speed up testing by syncing to a specific guild first
 DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")  # e.g. "1425585153585189067"
+
+
+# -----------------------------
+# Slash commands (local to this file)
+# -----------------------------
+@bot.tree.command(name="test", description="Quick check that the bot is alive and commands are synced.")
+async def test_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message("✅ Test command works!", ephemeral=True)
 
 
 # -----------------------------
@@ -48,8 +56,8 @@ async def run():
         "cogs.translate",
         "cogs.events",
         "cogs.ops_commands",
-        "cogs.analytics_commands",  # keep if you have it
-        "cogs.welcome",             # keep if you added /guide auto-welcome
+        "cogs.analytics_commands",  # keep if present
+        "cogs.welcome",             # keep if present
     ]
     for ext in cogs:
         try:
