@@ -16,22 +16,15 @@ async def init_db():
             guild_id INTEGER PRIMARY KEY, channel_id INTEGER)""")
         await db.execute("""CREATE TABLE IF NOT EXISTS bot_emote(
             guild_id INTEGER PRIMARY KEY, emote TEXT)""")
-
-        # NEW: AI usage tracking (rolling month)
         await db.execute("""CREATE TABLE IF NOT EXISTS ai_usage(
             month TEXT PRIMARY KEY, tokens INTEGER NOT NULL DEFAULT 0, eur REAL NOT NULL DEFAULT 0.0)""")
-
-        # NEW: per-user translation counts (all-time; keep it simple)
         await db.execute("""CREATE TABLE IF NOT EXISTS user_stats(
             user_id INTEGER PRIMARY KEY, translations INTEGER NOT NULL DEFAULT 0)""")
-
-        # NEW: guild feature toggle for AI
         await db.execute("""CREATE TABLE IF NOT EXISTS guild_ai(
             guild_id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1)""")
-
         await db.commit()
 
-# ---------- simple helpers ----------
+# ---------- helpers (cursor-style for aiosqlite compatibility) ----------
 async def set_user_lang(user_id: int, lang: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -42,8 +35,9 @@ async def set_user_lang(user_id: int, lang: str):
 
 async def get_user_lang(user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone("SELECT lang FROM user_lang WHERE user_id=?", (user_id,))
-        return row[0] if row else None
+        async with db.execute("SELECT lang FROM user_lang WHERE user_id=?", (user_id,)) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
 
 async def set_server_lang(guild_id: int, lang: str):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -55,8 +49,9 @@ async def set_server_lang(guild_id: int, lang: str):
 
 async def get_server_lang(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone("SELECT lang FROM server_lang WHERE guild_id=?", (guild_id,))
-        return row[0] if row else None
+        async with db.execute("SELECT lang FROM server_lang WHERE guild_id=?", (guild_id,)) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
 
 async def set_translation_channels(guild_id: int, channels: list[int]):
     channels_str = ",".join(map(str, channels))
@@ -69,10 +64,11 @@ async def set_translation_channels(guild_id: int, channels: list[int]):
 
 async def get_translation_channels(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone("SELECT channels FROM translation_channels WHERE guild_id=?", (guild_id,))
-        if row and row[0]:
-            return [int(x) for x in row[0].split(",") if x.strip()]
-        return []
+        async with db.execute("SELECT channels FROM translation_channels WHERE guild_id=?", (guild_id,)) as cur:
+            row = await cur.fetchone()
+            if row and row[0]:
+                return [int(x) for x in row[0].split(",") if x.strip()]
+            return []
 
 async def set_error_channel(guild_id: int, channel_id: int | None):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -84,8 +80,9 @@ async def set_error_channel(guild_id: int, channel_id: int | None):
 
 async def get_error_channel(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone("SELECT channel_id FROM error_channel WHERE guild_id=?", (guild_id,))
-        return row[0] if row else None
+        async with db.execute("SELECT channel_id FROM error_channel WHERE guild_id=?", (guild_id,)) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
 
 async def set_bot_emote(guild_id: int, emote: str):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -97,13 +94,14 @@ async def set_bot_emote(guild_id: int, emote: str):
 
 async def get_bot_emote(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone("SELECT emote FROM bot_emote WHERE guild_id=?", (guild_id,))
-        return row[0] if row else None
+        async with db.execute("SELECT emote FROM bot_emote WHERE guild_id=?", (guild_id,)) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
 
 # ---------- AI usage ----------
 def _month_key() -> str:
     now = datetime.now(timezone.utc)
-    return now.strftime("%Y-%m")  # e.g. 2025-11
+    return now.strftime("%Y-%m")
 
 async def add_ai_usage(tokens: int, eur: float):
     try:
@@ -117,15 +115,15 @@ async def add_ai_usage(tokens: int, eur: float):
             """, (mk, tokens, eur))
             await db.commit()
     except Exception:
-        # swallow – never block a translation on accounting
         pass
 
 async def get_current_ai_usage():
     async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone("SELECT tokens, eur FROM ai_usage WHERE month=?", (_month_key(),))
-        if row:
-            return int(row[0] or 0), float(row[1] or 0.0)
-        return 0, 0.0
+        async with db.execute("SELECT tokens, eur FROM ai_usage WHERE month=?", (_month_key(),)) as cur:
+            row = await cur.fetchone()
+            if row:
+                return int(row[0] or 0), float(row[1] or 0.0)
+            return 0, 0.0
 
 # ---------- Guild AI toggle ----------
 async def set_ai_enabled(guild_id: int, enabled: bool):
@@ -138,8 +136,9 @@ async def set_ai_enabled(guild_id: int, enabled: bool):
 
 async def get_ai_enabled(guild_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone("SELECT enabled FROM guild_ai WHERE guild_id=?", (guild_id,))
-        return bool(row[0]) if row else True  # default True
+        async with db.execute("SELECT enabled FROM guild_ai WHERE guild_id=?", (guild_id,)) as cur:
+            row = await cur.fetchone()
+            return bool(row[0]) if row else True
 
 # ---------- User stats ----------
 async def inc_user_translation(user_id: int, delta: int = 1):
@@ -155,8 +154,9 @@ async def inc_user_translation(user_id: int, delta: int = 1):
 
 async def top_translators(limit: int = 10):
     async with aiosqlite.connect(DB_PATH) as db:
-        rows = await db.execute_fetchall(
+        async with db.execute(
             "SELECT user_id, translations FROM user_stats ORDER BY translations DESC LIMIT ?",
             (limit,)
-        )
-        return [(int(r[0]), int(r[1])) for r in rows]
+        ) as cur:
+            rows = await cur.fetchall()
+            return [(int(r[0]), int(r[1])) for r in rows]
