@@ -58,6 +58,7 @@ async def run():
         "cogs.ops_commands",
         "cogs.analytics_commands",  # keep if present
         "cogs.welcome",             # keep if present
+        "cogs.owner_commands",
     ]
     for ext in cogs:
         try:
