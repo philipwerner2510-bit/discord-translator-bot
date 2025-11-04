@@ -1,4 +1,4 @@
-# cogs/translate.py  (UPDATED)
+# cogs/translate.py
 import re
 import discord
 from discord.ext import commands
@@ -104,7 +104,7 @@ class Translate(commands.Cog):
         user = guild.get_member(payload.user_id) or await self.bot.fetch_user(payload.user_id)
         await self._handle_reaction(message, str(payload.emoji), user)
 
-    # (keeps compatibility if events.py delegates classic reaction)
+    # optional compatibility if other cogs call it
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
         if user.bot or reaction.message.guild is None:
             return
