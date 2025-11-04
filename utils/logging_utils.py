@@ -4,6 +4,7 @@ import aiofiles
 import traceback
 import datetime
 import discord
+from utils import database  # <-- FIX: import database
 
 LOG_PATH = os.getenv("BOT_LOG_PATH", "/mnt/data/bot_errors.log")
 
@@ -25,10 +26,11 @@ async def log_error(bot, guild_id, message: str, exc: Exception = None, admin_no
     try:
         async with aiofiles.open(LOG_PATH, "a", encoding="utf-8") as f:
             await f.write(base + "\n")
-    except:
+    except Exception:
         pass
 
-    if not (bot and admin_notify): return
+    if not (bot and admin_notify and guild_id):
+        return
 
     now = time.time()
     last = _admin_notify_cache.get(guild_id, 0)
@@ -37,11 +39,13 @@ async def log_error(bot, guild_id, message: str, exc: Exception = None, admin_no
     _admin_notify_cache[guild_id] = now
 
     guild = bot.get_guild(guild_id)
-    if not guild: return
+    if not guild:
+        return
 
     ch_id = await database.get_error_channel(guild_id)
     ch = guild.get_channel(ch_id) if ch_id else None
-    if not ch: return
+    if not ch:
+        return
 
     try:
         emb = discord.Embed(
@@ -53,5 +57,5 @@ async def log_error(bot, guild_id, message: str, exc: Exception = None, admin_no
         if stack:
             emb.add_field(name="Details", value=f"```{stack[:1020]}```", inline=False)
         await ch.send(embed=emb)
-    except:
+    except Exception:
         pass
