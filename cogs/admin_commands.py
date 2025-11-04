@@ -99,7 +99,7 @@ class AdminCommands(commands.Cog):
         await interaction.followup.send(status, ephemeral=True)
 
     # -----------------------
-    # /settings — show server settings (AI, Libre URL, cache, channels, etc.)
+    # /settings — show server settings (+ Test AI button)
     # -----------------------
     @is_admin()
     @app_commands.command(name="settings", description="View translation settings for this server.")
@@ -113,7 +113,6 @@ class AdminCommands(commands.Cog):
         channels = await database.get_translation_channels(gid)
         ai_enabled = await database.get_ai_enabled(gid)
 
-        # From env (falls back to public instance)
         libre_url = os.getenv("LIBRE_URL", "https://libretranslate.de/translate")
         cache_info = "✅ Enabled (24h TTL)"
 
@@ -132,8 +131,70 @@ class AdminCommands(commands.Cog):
         embed.add_field(name="Libre Endpoint", value=f"`{libre_url}`", inline=False)
         embed.add_field(name="Cache", value=cache_info, inline=True)
 
-        embed.set_footer(text="Demon Translator © by Polarix1954 😈🔥")
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        # ---------- View with "Test AI Now" button ----------
+        view = discord.ui.View(timeout=120)
+
+        test_btn = discord.ui.Button(
+            label="🧪 Test AI Now",
+            style=discord.ButtonStyle.primary
+        )
+
+        async def test_cb(btn_inter: discord.Interaction):
+            # Admin gate (just in case)
+            if not btn_inter.user.guild_permissions.administrator:
+                return await btn_inter.response.send_message("❌ Admins only.", ephemeral=True)
+
+            if not ai_enabled:
+                return await btn_inter.response.send_message(
+                    "⚙️ AI is currently **disabled**. Enable it with `/aisettings true`.",
+                    ephemeral=True
+                )
+
+            key = os.getenv("OPENAI_API_KEY")
+            if not key:
+                return await btn_inter.response.send_message(
+                    "⚠️ No `OPENAI_API_KEY` set for this bot. Cannot run AI test.",
+                    ephemeral=True
+                )
+
+            # Choose a target language to demo
+            target = default_lang if default_lang in SUPPORTED_LANGS else "en"
+
+            # Run a tiny test translation
+            try:
+                from openai import OpenAI
+                client = OpenAI(api_key=key)
+
+                sample = "This is a quick AI self-check. If you see this translated, AI is working."
+                # run in executor to avoid blocking loop
+                resp = await btn_inter.client.loop.run_in_executor(
+                    None,
+                    lambda: client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system",
+                             "content": f"Translate the user's message to '{target}'. "
+                                        f"Preserve tone and clarity. Return only the translation."},
+                            {"role": "user", "content": sample},
+                        ],
+                        temperature=0.2,
+                    )
+                )
+                out = resp.choices[0].message.content.strip()
+                await btn_inter.response.send_message(
+                    f"✅ **AI OK** — Translated to `{target}`:\n> {out}",
+                    ephemeral=True
+                )
+            except Exception as e:
+                await btn_inter.response.send_message(
+                    f"❌ AI test failed: `{e}`",
+                    ephemeral=True
+                )
+
+        test_btn.callback = test_cb
+        view.add_item(test_btn)
+
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     # -----------------------
     # /langlist — quick list of supported language codes
