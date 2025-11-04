@@ -1,44 +1,42 @@
+# cogs/admin_commands.py  (UPDATED)
 import re
 import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import database
+from utils.config import SUPPORTED_LANGS
 
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
-SUPPORTED_LANGS = [
-    "en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ja",
-    "de", "jv", "ko", "vi", "mr", "ta", "ur", "tr", "it", "th",
-    "gu", "kn", "ml", "pa", "or", "fa", "sw", "am", "ha", "yo"
-]
 
 class AdminCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # -----------------------
-    # Set default server language
-    # -----------------------
     @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(lang="Two-letter language code (e.g., en, de, fr)")
     @app_commands.command(name="defaultlang", description="Set the default translation language for this server.")
     async def defaultlang(self, interaction: discord.Interaction, lang: str):
-        guild_id = interaction.guild.id
         lang = lang.lower()
         if lang not in SUPPORTED_LANGS:
             await interaction.response.send_message(
                 f"❌ Invalid language code. Supported: {', '.join(SUPPORTED_LANGS)}", ephemeral=True
-            )
-            return
-        await database.set_server_lang(guild_id, lang)
+            ); return
+        await database.set_server_lang(interaction.guild.id, lang)
         await interaction.response.send_message(f"✅ Server default language set to `{lang}`.", ephemeral=True)
 
-    # -----------------------
-    # Select translation channels
-    # -----------------------
+    @defaultlang.autocomplete("lang")
+    async def defaultlang_autocomplete(self, interaction: discord.Interaction, current: str):
+        cur = (current or "").lower()
+        return [app_commands.Choice(name=c, value=c) for c in SUPPORTED_LANGS if cur in c][:25]
+
     @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.command(name="channelselection", description="Select channels where the bot reacts to messages for translation.")
     async def channelselection(self, interaction: discord.Interaction):
         guild = interaction.guild
-        options = [discord.SelectOption(label=ch.name, value=str(ch.id)) for ch in guild.text_channels]
+        channels = sorted(guild.text_channels, key=lambda c: (c.category_id or 0, c.position))
+        options = [discord.SelectOption(label=ch.name[:100], value=str(ch.id)) for ch in channels[:25]]
         select = discord.ui.Select(
             placeholder="Select translation channels...",
             min_values=1,
@@ -52,115 +50,76 @@ class AdminCommands(commands.Cog):
             await select_interaction.response.send_message(f"✅ Translation channels set: {mentions}", ephemeral=True)
         select.callback = select_callback
         view = discord.ui.View(timeout=60)
+        async def on_timeout():
+            for item in view.children:
+                item.disabled = True
+            try:
+                await interaction.edit_original_response(view=view)
+            except discord.HTTPException:
+                pass
+        view.on_timeout = on_timeout
         view.add_item(select)
         await interaction.response.send_message("Select the channels for translation:", view=view, ephemeral=True)
 
-    # -----------------------
-    # Set or remove error channel
-    # -----------------------
     @app_commands.guild_only()
-    @app_commands.command(name="seterrorchannel", description="Define the error logging channel for your server. Pass 'none' to remove.")
-    async def seterrorchannel(self, interaction: discord.Interaction, channel: str):
-        guild_id = interaction.guild.id
-        if channel.lower() == "none":
-            await database.set_error_channel(guild_id, None)
-            await interaction.response.send_message(f"✅ Error channel removed.", ephemeral=True)
-            return
-        # Try to resolve channel by mention or ID
-        target_channel = None
-        if interaction.guild:
-            try:
-                # Try mention ID
-                if channel.startswith("<#") and channel.endswith(">"):
-                    channel_id = int(channel[2:-1])
-                    target_channel = interaction.guild.get_channel(channel_id)
-                else:
-                    channel_id = int(channel)
-                    target_channel = interaction.guild.get_channel(channel_id)
-            except Exception:
-                target_channel = None
-        if not target_channel:
-            await interaction.response.send_message(f"❌ Invalid channel. Pass a valid text channel or 'none' to remove.", ephemeral=True)
-            return
-        await database.set_error_channel(guild_id, target_channel.id)
-        await interaction.response.send_message(f"✅ Error channel set to {target_channel.mention}.", ephemeral=True)
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(channel="Error logging channel (leave empty to clear)")
+    @app_commands.command(name="seterrorchannel", description="Define or clear the error logging channel for your server.")
+    async def seterrorchannel(self, interaction: discord.Interaction, channel: discord.TextChannel | None):
+        gid = interaction.guild.id
+        if channel is None:
+            await database.set_error_channel(gid, None)
+            await interaction.response.send_message("✅ Error channel removed.", ephemeral=True); return
+        await database.set_error_channel(gid, channel.id)
+        await interaction.response.send_message(f"✅ Error channel set to {channel.mention}.", ephemeral=True)
 
-    # -----------------------
-    # Set bot reaction emote
-    # -----------------------
     @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(emote="Emoji or custom emoji mention")
     @app_commands.command(name="emote", description="Set the bot's reaction emote for translation channels.")
     async def emote(self, interaction: discord.Interaction, emote: str):
-        guild_id = interaction.guild.id
-        emote = emote.strip()
-        is_custom = CUSTOM_EMOJI_RE.match(emote) is not None
-        is_unicode = len(emote) > 0
-        if not (is_custom or is_unicode):
-            await interaction.response.send_message("❌ Invalid emote.", ephemeral=True)
-            return
-        await database.set_bot_emote(guild_id, emote)
+        guild = interaction.guild
+        m = CUSTOM_EMOJI_RE.match(emote.strip())
+        if m:
+            emoji_id = int(m.group(3))
+            if not any(e.id == emoji_id for e in guild.emojis):
+                await interaction.response.send_message("❌ I can’t use that custom emoji in this server.", ephemeral=True)
+                return
+        await database.set_bot_emote(guild.id, emote.strip())
         await interaction.response.send_message(f"✅ Bot reaction emote set to {emote}.", ephemeral=True)
 
-    # -----------------------
-    # Show server settings
-    # -----------------------
     @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.command(name="settings", description="Show current server settings for the bot.")
     async def settings(self, interaction: discord.Interaction):
-        guild_id = interaction.guild.id
-        default_lang = await database.get_server_lang(guild_id) or "Not set"
-        emote = await database.get_bot_emote(guild_id) or "🔃"
-        error_ch_id = await database.get_error_channel(guild_id)
+        guild = interaction.guild
+        gid = guild.id
+        default_lang = await database.get_server_lang(gid) or "Not set"
+        emote = await database.get_bot_emote(gid) or "🔃"
+        error_ch_id = await database.get_error_channel(gid)
         if error_ch_id:
-            error_channel = interaction.guild.get_channel(error_ch_id)
+            error_channel = guild.get_channel(error_ch_id)
             error_channel_name = error_channel.mention if error_channel else f"❌ Invalid Channel (ID {error_ch_id})"
         else:
             error_channel_name = "Not set"
-        channel_ids = await database.get_translation_channels(guild_id)
-        if channel_ids:
-            channel_mentions = ", ".join(f"<#{cid}>" for cid in channel_ids)
-        else:
-            channel_mentions = "None"
-        embed = discord.Embed(
-            title="🛠️ Server Settings",
-            color=0xde002a
-        )
+        channel_ids = await database.get_translation_channels(gid)
+        channel_mentions = ", ".join(f"<#{cid}>" for cid in channel_ids) if channel_ids else "None"
+        embed = discord.Embed(title="🛠️ Server Settings", color=0xDE002A)
         embed.add_field(name="Default Language", value=default_lang, inline=False)
         embed.add_field(name="Bot Emote", value=emote, inline=False)
         embed.add_field(name="Error Channel", value=error_channel_name, inline=False)
         embed.add_field(name="Translation Channels", value=channel_mentions, inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # -----------------------
-    # Language list (global)
-    # -----------------------
-    @app_commands.command(name="langlist", description="Show all supported translation languages with flags, codes, and names.")
+    @app_commands.command(name="langlist", description="Show all supported translation languages with codes.")
     async def langlist(self, interaction: discord.Interaction):
-        lang_info = {
-            "en": ("🇬🇧", "English"), "zh": ("🇨🇳", "Mandarin Chinese"), "hi": ("🇮🇳", "Hindi"),
-            "es": ("🇪🇸", "Spanish"), "fr": ("🇫🇷", "French"), "ar": ("🇸🇦", "Arabic"),
-            "bn": ("🇧🇩", "Bengali"), "pt": ("🇵🇹", "Portuguese"), "ru": ("🇷🇺", "Russian"),
-            "ja": ("🇯🇵", "Japanese"), "de": ("🇩🇪", "German"), "jv": ("🇮🇩", "Javanese"),
-            "ko": ("🇰🇷", "Korean"), "vi": ("🇻🇳", "Vietnamese"), "mr": ("🇮🇳", "Marathi"),
-            "ta": ("🇮🇳", "Tamil"), "ur": ("🇵🇰", "Urdu"), "tr": ("🇹🇷", "Turkish"), "it": ("🇮🇹", "Italian"),
-            "th": ("🇹🇭", "Thai"), "gu": ("🇮🇳", "Gujarati"), "kn": ("🇮🇳", "Kannada"), "ml": ("🇮🇳", "Malayalam"),
-            "pa": ("🇮🇳", "Punjabi"), "or": ("🇮🇳", "Odia"), "fa": ("🇮🇷", "Persian"), "sw": ("🇰🇪", "Swahili"),
-            "am": ("🇪🇹", "Amharic"), "ha": ("🇳🇬", "Hausa"), "yo": ("🇳🇬", "Yoruba")
-        }
-        codes = list(lang_info.keys())
+        codes = SUPPORTED_LANGS
         rows = []
         for i in range(0, len(codes), 3):
-            row_items = []
-            for j in range(3):
-                if i + j < len(codes):
-                    code = codes[i + j]
-                    flag, name = lang_info[code]
-                    row_items.append(f"{flag} `{code}` {name}")
-            rows.append("   |   ".join(row_items))
-        embed = discord.Embed(title="🌐 Translator Language Codes", description="\n".join(rows), color=0xde002a)
-        embed.set_footer(text=f"Total languages: {len(lang_info)}")
+            rows.append("   |   ".join(f"`{code}`" for code in codes[i:i+3]))
+        embed = discord.Embed(title="🌐 Translator Language Codes", description="\n".join(rows), color=0xDE002A)
+        embed.set_footer(text=f"Total languages: {len(codes)}")
         await interaction.response.send_message(embed=embed, ephemeral=False)
-
 
 async def setup(bot):
     await bot.add_cog(AdminCommands(bot))
