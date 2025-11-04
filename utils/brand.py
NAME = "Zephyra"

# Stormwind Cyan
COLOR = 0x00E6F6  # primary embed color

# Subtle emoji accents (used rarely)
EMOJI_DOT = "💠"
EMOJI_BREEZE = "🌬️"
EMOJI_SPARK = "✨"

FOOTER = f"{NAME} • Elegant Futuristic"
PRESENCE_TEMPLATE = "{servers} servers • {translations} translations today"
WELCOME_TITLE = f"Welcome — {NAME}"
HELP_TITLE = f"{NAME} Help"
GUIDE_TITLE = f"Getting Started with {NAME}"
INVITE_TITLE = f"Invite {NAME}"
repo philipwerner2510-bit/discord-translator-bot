@@ -1,0 +1,17 @@
+# utils/brand.py
+NAME = "Zephyra"
+
+# Stormwind Cyan
+COLOR = 0x00E6F6  # primary embed color
+
+# Subtle emoji accents (used rarely)
+EMOJI_DOT = "💠"
+EMOJI_BREEZE = "🌬️"
+EMOJI_SPARK = "✨"
+
+FOOTER = f"{NAME} • Elegant Futuristic"
+PRESENCE_TEMPLATE = "{servers} servers • {translations} translations today"
+WELCOME_TITLE = f"Welcome — {NAME}"
+HELP_TITLE = f"{NAME} Help"
+GUIDE_TITLE = f"Getting Started with {NAME}"
+INVITE_TITLE = f"Invite {NAME}"
