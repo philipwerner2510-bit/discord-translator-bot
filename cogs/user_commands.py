@@ -7,11 +7,21 @@ from discord import app_commands
 BOT_COLOR = 0xDE002A
 OWNER_ID = 762267166031609858  # Polarix1954
 
+# Keep the list <= 25 for a single select menu
+LANGS = {
+    "en": ("🇬🇧", "English"),
+    "de": ("🇩🇪", "German"),
+    "es": ("🇪🇸", "Spanish"),
+    "fr": ("🇫🇷", "French"),
+    "it": ("🇮🇹", "Italian"),
+    "ja": ("🇯🇵", "Japanese"),
+    "ko": ("🇰🇷", "Korean"),
+    "zh": ("🇨🇳", "Chinese"),
+}
 
 def build_invite_url(app_id: int) -> str:
     perms = 274878188544
     return f"https://discord.com/oauth2/authorize?client_id={app_id}&permissions={perms}&scope=bot%20applications.commands"
-
 
 # Optional: lazy OpenAI client for /aitest
 from openai import OpenAI
@@ -76,7 +86,7 @@ def embed_admin() -> discord.Embed:
         name="Setup",
         value=(
             "• `/channelselection` — choose channels for reaction-to-translate\n"
-            "• `/defaultlang <code>` — set server default language (e.g., `en`, `de`)\n"
+            "• `/defaultlang` — set server default language (dropdown)\n"
             "• `/emote <emote>` — set the reaction emote the bot listens for\n"
             "• `/seterrorchannel #channel` — receive warnings & errors"
         ),
@@ -129,7 +139,64 @@ def embed_owner() -> discord.Embed:
     return e
 
 
-# ---------- Help View with conditional tabs ----------
+# ---------- Views ----------
+class LanguageSelect(discord.ui.Select):
+    def __init__(self, placeholder: str):
+        opts = []
+        for code, (flag, name) in LANGS.items():
+            label = f"{flag} {name}"
+            opts.append(discord.SelectOption(label=label, value=code, description=f"{name} ({code})"))
+
+        super().__init__(
+            placeholder=placeholder,
+            min_values=1,
+            max_values=1,
+            options=opts
+        )
+
+class SetMyLangView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        select = LanguageSelect("Choose your language…")
+        select.callback = self._on_select
+        self.add_item(select)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        # Only the original user can use the selector
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ This menu isn’t for you.", ephemeral=True)
+
+        code = interaction.data["values"][0]
+        from utils import database
+        await database.set_user_lang(interaction.user.id, code)
+        await interaction.response.edit_message(
+            content=f"✅ Your personal language is now **{LANGS[code][1]}** (`{code}`).",
+            embed=None, view=None
+        )
+
+class DefaultLangView(discord.ui.View):
+    def __init__(self, guild_id: int, requester_id: int):
+        super().__init__(timeout=120)
+        self.guild_id = guild_id
+        self.requester_id = requester_id
+        select = LanguageSelect("Choose the server’s default language…")
+        select.callback = self._on_select
+        self.add_item(select)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+        code = interaction.data["values"][0]
+        from utils import database
+        await database.set_server_lang(interaction.guild.id, code)
+        await interaction.response.edit_message(
+            content=f"✅ Server default language is now **{LANGS[code][1]}** (`{code}`).",
+            embed=None, view=None
+        )
+
+
+# ---------- Help View (User/Admin/Owner tabs) ----------
 class HelpView(discord.ui.View):
     def __init__(self, *, show_admin: bool, show_owner: bool, invite_url: str):
         super().__init__(timeout=120)
@@ -175,29 +242,36 @@ class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # /help — Tabbed view (User / Admin / Owner) with robust visibility
+    # /help — tabbed view
     @app_commands.command(name="help", description="Interactive help: User, Admin, and Owner tabs.")
     async def help_cmd(self, interaction: discord.Interaction):
         app_id = self.bot.user.id if self.bot.user else 0
         invite_url = build_invite_url(app_id)
-
-        # Robust visibility detection:
-        # - In guild: Interaction.user is a Member with guild_permissions
-        # - In DM: Interaction.user is a User (no guild); admin must be False
         is_owner = (interaction.user.id == OWNER_ID)
-        is_admin = False
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            is_admin = interaction.user.guild_permissions.administrator
+        is_admin = bool(interaction.user.guild_permissions.administrator) if interaction.guild else False
 
         view = HelpView(show_admin=is_admin, show_owner=is_owner, invite_url=invite_url)
         await interaction.response.send_message(embed=embed_user(), view=view, ephemeral=True)
 
-    # /ping — latency check
+    # /ping
     @app_commands.command(name="ping", description="Check bot latency.")
     async def ping_cmd(self, interaction: discord.Interaction):
         await interaction.response.send_message(f"🏓 Pong! {round(self.bot.latency * 1000)}ms", ephemeral=True)
 
-    # /aitest — owner-only quick demo
+    # /setmylang — dropdown (users)
+    @app_commands.command(name="setmylang", description="Choose your personal translation language.")
+    async def setmylang(self, interaction: discord.Interaction):
+        view = SetMyLangView(interaction.user.id)
+        await interaction.response.send_message("Pick your language:", view=view, ephemeral=True)
+
+    # /defaultlang — dropdown (admins)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.command(name="defaultlang", description="Set the server default translation language (dropdown).")
+    async def defaultlang(self, interaction: discord.Interaction):
+        view = DefaultLangView(interaction.guild.id, interaction.user.id)
+        await interaction.response.send_message("Pick the **server default language**:", view=view, ephemeral=True)
+
+    # /aitest — owner only (unchanged)
     @app_commands.command(name="aitest", description="Owner-only: quick translation demo.")
     async def aitest_cmd(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_ID:
@@ -208,14 +282,13 @@ class UserCommands(commands.Cog):
             return await interaction.response.send_message("⚠️ No OPENAI_API_KEY set.", ephemeral=True)
 
         await interaction.response.defer(ephemeral=True)
-
         sample = "Nah bro that’s cap, ain’t no way he pulled that W 💀🔥"
         target_lang = "de"
 
         try:
             resp = await interaction.client.loop.run_in_executor(
                 None,
-                lambda: client.chat_completions.create(  # if using newer SDK, replace with client.chat.completions.create
+                lambda: client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
                         {"role": "system",
@@ -226,17 +299,13 @@ class UserCommands(commands.Cog):
                     temperature=0.2,
                 )
             )
-            # Adjust accessor depending on SDK; for 1.3.7 use .chat.completions.create above and:
-            # out = resp.choices[0].message.content.strip()
-            out = getattr(resp.choices[0], "message", resp.choices[0]).content.strip()
-
+            out = resp.choices[0].message.content.strip()
             embed = discord.Embed(
                 title="🧪 Demo Result",
                 color=BOT_COLOR,
                 description=f"**Source:** `{sample}`\n**→ {target_lang.upper()}:** {out}"
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
-
         except Exception as e:
             await interaction.followup.send(f"❌ Demo failed: `{e}`", ephemeral=True)
 
