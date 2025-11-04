@@ -1,3 +1,4 @@
+# cogs/admin_commands.py
 import os
 import aiohttp
 import discord
@@ -42,18 +43,8 @@ class AdminCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @is_admin()
-    @app_commands.command(name="defaultlang", description="Set the default translation language for this server.")
-    async def defaultlang(self, interaction: discord.Interaction, lang: str):
-        await interaction.response.defer(ephemeral=True)
-        lang = lang.lower()
-        if lang not in SUPPORTED_LANGS:
-            return await interaction.followup.send(
-                f"❌ Invalid language. Supported: {', '.join(SUPPORTED_LANGS)}",
-                ephemeral=True
-            )
-        await database.set_server_lang(interaction.guild.id, lang)
-        await interaction.followup.send(f"✅ Default server language set to `{lang}`.", ephemeral=True)
+    # NOTE: /defaultlang moved to user_commands as a dropdown (still admin-only).
+    # Keeping this here for clarity—no duplicate command.
 
     @is_admin()
     @app_commands.command(name="channelselection", description="Choose channels where translations are active.")
@@ -92,7 +83,7 @@ class AdminCommands(commands.Cog):
         )
 
     @is_admin()
-    @app_commands.command(name="seterrorchannel", description="Set a channel where AI warnings & errors appear.")
+    @app_commands.command(name="seterrorchannel", description="Set a channel where warnings & errors appear.")
     async def seterrorchannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         await database.set_error_channel(interaction.guild.id, channel.id)
         await interaction.response.send_message(f"✅ Error channel set to {channel.mention}", ephemeral=True)
@@ -104,7 +95,7 @@ class AdminCommands(commands.Cog):
         await interaction.response.send_message(f"✅ Reaction emote set to {emote}", ephemeral=True)
 
     @is_admin()
-    @app_commands.command(name="aisettings", description="Enable or disable AI translations for this server.")
+    @app_commands.command(name="aisettings", description="Enable or disable advanced translations for this server.")
     async def aisettings(self, interaction: discord.Interaction, enabled: bool):
         await interaction.response.defer(ephemeral=True)
         await database.set_ai_enabled(interaction.guild.id, enabled)
@@ -161,7 +152,7 @@ class AdminCommands(commands.Cog):
 
             try:
                 target = default_lang if default_lang in SUPPORTED_LANGS else "en"
-                sample = "This is a quick AI self-check. If you see this translated, AI is working."
+                sample = "This is a quick self-check. If you see this translated, it's working."
                 resp = await btn_inter.client.loop.run_in_executor(
                     None,
                     lambda: client.chat.completions.create(
