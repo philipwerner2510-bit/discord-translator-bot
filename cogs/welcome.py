@@ -1,112 +1,86 @@
 # cogs/welcome.py
+import os
 import discord
 from discord.ext import commands
 from discord import app_commands
 
-BOT_COLOR = 0xDE002A  # consistent with your other embeds
+BOT_COLOR = 0xDE002A
+OWNER_ID = 762267166031609858
 
-def build_user_welcome_embed(guild: discord.Guild) -> discord.Embed:
+def build_invite_url(app_id: int) -> str:
+    perms = 274878188544
+    return f"https://discord.com/oauth2/authorize?client_id={app_id}&permissions={perms}&scope=bot%20applications.commands"
+
+def guide_embed() -> discord.Embed:
     e = discord.Embed(
-        title="😈 Demon Translator — Quick Start",
+        title="👋 Welcome to Demon Translator",
         color=BOT_COLOR,
         description=(
-            "Welcome to **Demon Translator**! Here’s how to use me:\n\n"
-            "• **Set your language** → `/setmylang` (pick from a dropdown or type a code)\n"
-            "• **Translate manually** → `/translate <text> <lang>`\n"
-            "• **See languages** → `/langlist` (flags + names)\n"
-            "• **Trigger translations** → in selected channels, react to a message with the bot’s emoji\n"
-            "• **Check me** → `/ping`, `/test`\n\n"
-            "**Tip:** If you react and don’t get a DM, enable “Allow direct messages” in your Privacy settings."
+            "Thanks for adding me to your server! Here’s how to use me:\n\n"
+            "✅ **React** to any message with the bot emote → Get the translation in DMs\n"
+            "✅ Set your language using **/setmylang** (clean dropdown)\n"
+            "✅ Translate custom text with **/translate <text>**\n"
+            "✅ See this menu anytime with **/guide** or **/help**\n"
         )
     )
-    e.set_footer(text="Created by Polarix1954")
+    e.add_field(
+        name="✨ Useful Commands",
+        value=(
+            "• `/setmylang` — choose your translation language\n"
+            "• `/translate <text>` — manual translation\n"
+            "• `/ping` — latency check\n"
+            "• `/help` — full User/Admin/Owner command menu\n"
+            "• `/langlist` — language code list"
+        ),
+        inline=False
+    )
+    e.set_footer(text="Demon Translator © by Polarix1954 😈🔥")
     return e
-
 
 class Welcome(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # Auto-send the user quick-start when joining a new server
+    # -----------------------
+    # /guide (Admin Only)
+    # -----------------------
+    @app_commands.command(name="guide", description="Send the guide embed in this channel.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def guide_cmd(self, interaction: discord.Interaction):
+        app_id = self.bot.user.id
+        invite_url = build_invite_url(app_id)
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(label="➕ Invite Me", url=invite_url))
+
+        await interaction.response.send_message(embed=guide_embed(), view=view)
+    
+    @guide_cmd.error
+    async def guide_cmd_error(self, interaction: discord.Interaction, error):
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message("❌ Only admins can send the guide.", ephemeral=True)
+
+    # -----------------------
+    # Auto-DM when joining new server
+    # -----------------------
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
-        embed = build_user_welcome_embed(guild)
+        app_id = self.bot.user.id
+        invite_url = build_invite_url(app_id)
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(label="➕ Invite Me", url=invite_url))
 
-        # Prefer the system channel if we can speak there
-        target = None
-        if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
-            target = guild.system_channel
-        else:
-            # fallback: first text channel with send permission
-            for ch in guild.text_channels:
-                perms = ch.permissions_for(guild.me)
-                if perms.view_channel and perms.send_messages:
-                    target = ch
-                    break
-
-        if target:
-            try:
-                await target.send(embed=embed)
-            except Exception:
-                pass  # ignore if channel gets locked or deleted right after join
-
-    # /guide: Admins can post the same user-facing Quick Start embed to a channel
-    @app_commands.command(
-        name="guide",
-        description="Post the Demon Translator Quick Start for everyone to read (admins only)."
-    )
-    @app_commands.default_permissions(manage_guild=True)
-    async def guide_cmd(self, interaction: discord.Interaction):
-        embed = build_user_welcome_embed(interaction.guild)
-
-        # Try to post publicly in the current channel
+        # Try DM guild owner first
         try:
-            await interaction.response.send_message(embed=embed)  # public message
-        except discord.Forbidden:
-            # Fallback if we can't speak here: send ephemeral notice with a button to pick another channel
-            view = discord.ui.View()
-            # Build a dropdown of channels we CAN send to
-            options = []
-            for ch in interaction.guild.text_channels[:25]:
-                perms = ch.permissions_for(interaction.guild.me)
-                if perms.view_channel and perms.send_messages:
-                    options.append(discord.SelectOption(label=f"#{ch.name}", value=str(ch.id)))
-            if options:
-                select = discord.ui.Select(
-                    placeholder="Choose a channel I can speak in…",
-                    min_values=1, max_values=1, options=options
-                )
+            await guild.owner.send(embed=guide_embed(), view=view)
+            return
+        except:
+            pass
 
-                async def on_select(itx: discord.Interaction):
-                    if itx.user.id != interaction.user.id:
-                        return await itx.response.defer()
-                    channel_id = int(select.values[0])
-                    channel = interaction.guild.get_channel(channel_id)
-                    try:
-                        await channel.send(embed=embed)
-                        await itx.response.edit_message(
-                            content=f"✅ Posted the guide in {channel.mention}.",
-                            view=None
-                        )
-                    except Exception as e:
-                        await itx.response.edit_message(
-                            content=f"❌ Couldn't send to <#{channel_id}>: {e}",
-                            view=None
-                        )
-
-                select.callback = on_select
-                view.add_item(select)
-                await interaction.response.send_message(
-                    content="I can’t send a public message here. Pick another channel:",
-                    view=view,
-                    ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    "❌ I don’t have permission to speak in any text channel.",
-                    ephemeral=True
-                )
-
+        # Otherwise send to first channel bot can speak in
+        for ch in guild.text_channels:
+            if ch.permissions_for(guild.me).send_messages:
+                await ch.send(embed=guide_embed(), view=view)
+                break
 
 async def setup(bot):
     await bot.add_cog(Welcome(bot))
