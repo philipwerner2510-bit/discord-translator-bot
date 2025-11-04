@@ -6,8 +6,7 @@ from discord import app_commands
 from utils import database
 from utils.config import SUPPORTED_LANGS, LANG_META, lang_label
 
-OWNER_ID = int(os.getenv("OWNER_ID", "762267166031609858"))  # Polarix1954
-
+OWNER_ID = int(os.getenv("OWNER_ID", "762267166031609858"))
 
 def pretty_lang(code: str | None) -> str:
     if not code:
@@ -15,9 +14,7 @@ def pretty_lang(code: str | None) -> str:
     flag, name = LANG_META.get(code, ("🌐", code.upper()))
     return f"{flag} {name} ({code})"
 
-
 class HelpView(discord.ui.View):
-    """Tabbed /help with permission-aware buttons and dynamic content."""
     def __init__(self, interaction: discord.Interaction, user_lang: str | None, server_lang: str | None):
         super().__init__(timeout=120)
         self._invoker = interaction.user
@@ -26,8 +23,6 @@ class HelpView(discord.ui.View):
         self._is_owner = self._invoker.id == OWNER_ID
         self._user_lang = user_lang
         self._server_lang = server_lang
-
-        # Disable tabs the user cannot open
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 if child.label == "Admin" and not self._is_admin:
@@ -56,8 +51,6 @@ class HelpView(discord.ui.View):
             return await itx.response.defer()
         await self._swap(itx, embed_owner)
 
-
-# ---------- EMBEDS ----------
 def embed_general(user_lang: str | None, server_lang: str | None):
     e = discord.Embed(title="📖 Demon Translator — General", color=0xDE002A)
     e.add_field(
@@ -66,8 +59,7 @@ def embed_general(user_lang: str | None, server_lang: str | None):
             "Set **your** personal language.\n"
             "• Type a code (e.g., `en`, `de`) **or** run `/setmylang` with **no value** to open a dropdown with flags.\n"
             f"• Yours: **{pretty_lang(user_lang)}**"
-        ),
-        inline=False
+        ), inline=False
     )
     e.add_field(name="/translate `<text>` `<lang>`", value="Translate any text manually.", inline=False)
     e.add_field(name="/langlist", value="Show supported languages (flags + names + codes).", inline=False)
@@ -79,7 +71,6 @@ def embed_general(user_lang: str | None, server_lang: str | None):
     e.set_footer(text=f"Server default language: {pretty_lang(server_lang)} • Created by Polarix1954")
     return e
 
-
 def embed_admin(_user_lang: str | None, server_lang: str | None):
     e = discord.Embed(title="🛠 Admin Commands", description="Administrator permissions required.", color=0xDE002A)
     e.add_field(
@@ -88,8 +79,7 @@ def embed_admin(_user_lang: str | None, server_lang: str | None):
             "Set **server default** language.\n"
             "• Type a code **or** run `/defaultlang` with **no value** to open a dropdown with flags.\n"
             f"• Current server default: **{pretty_lang(server_lang)}**"
-        ),
-        inline=False
+        ), inline=False
     )
     e.add_field(name="/channelselection", value="Pick channels where the bot reacts for translation.", inline=False)
     e.add_field(name="/seterrorchannel `<#channel|none>`", value="Set or clear the error logging channel.", inline=False)
@@ -99,47 +89,36 @@ def embed_admin(_user_lang: str | None, server_lang: str | None):
     e.add_field(name="/stats", value="Uptime, servers, translations today.", inline=False)
     return e
 
-
 def embed_owner(_user_lang: str | None, _server_lang: str | None):
     e = discord.Embed(title="👑 Owner Commands", description="Reserved for Polarix1954", color=0xDE002A)
     e.add_field(name="/reloadconfig", value="Reload `config.json` without a restart.", inline=False)
     e.add_field(name="/exportdb", value="Export a live DB backup to `/mnt/data`.", inline=False)
     return e
 
-
-# ---------- COG ----------
 class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # /help (permission-aware tabs + dynamic info)
     @app_commands.command(name="help", description="Show help for Demon Translator.")
     async def help_cmd(self, interaction: discord.Interaction):
         user_lang = await database.get_user_lang(interaction.user.id)
         server_lang = await database.get_server_lang(interaction.guild.id) if interaction.guild else None
-
         view = HelpView(interaction, user_lang, server_lang)
-        await interaction.response.send_message(
-            embed=embed_general(user_lang, server_lang),
-            view=view,
-            ephemeral=True
-        )
+        await interaction.response.send_message(embed=embed_general(user_lang, server_lang), view=view, ephemeral=True)
 
-    # /test
     @app_commands.command(name="test", description="Check if the bot is responsive.")
     async def test_cmd(self, interaction: discord.Interaction):
         await interaction.response.send_message("✅ Demon Bot is online and lurking 😈", ephemeral=True)
 
-    # /ping
     @app_commands.command(name="ping", description="Check bot latency.")
     async def ping_cmd(self, interaction: discord.Interaction):
         latency = round(self.bot.latency * 1000)
         await interaction.response.send_message(f"🏓 Pong! `{latency}ms`", ephemeral=True)
 
-    # /setmylang — typed OR dropdown (no-arg)
     @app_commands.command(name="setmylang", description="Set your personal translation language.")
     @app_commands.describe(lang="Language code (e.g., en, de). Leave empty to pick from a dropdown.")
     async def setmylang(self, interaction: discord.Interaction, lang: str | None = None):
+        from utils.config import LANG_META  # local import to avoid cycles
         if lang:
             code = lang.lower()
             if code not in SUPPORTED_LANGS:
@@ -148,9 +127,10 @@ class UserCommands(commands.Cog):
                     ephemeral=True
                 )
             await database.set_user_lang(interaction.user.id, code)
-            return await interaction.response.send_message(f"✅ Saved your language as **{pretty_lang(code)}**", ephemeral=True)
+            flag, name = LANG_META.get(code, ("🌐", code.upper()))
+            return await interaction.response.send_message(f"✅ Saved your language as **{flag} {name} ({code})**", ephemeral=True)
 
-        # open dropdown
+        # Dropdown (paginated)
         PER_PAGE = 25
         codes_sorted = sorted(SUPPORTED_LANGS, key=lambda c: LANG_META.get(c, ("🌐", c.upper()))[1])
         pages = [codes_sorted[i:i+PER_PAGE] for i in range(0, len(codes_sorted), PER_PAGE)]
@@ -189,18 +169,14 @@ class UserCommands(commands.Cog):
                 if total_pages > 1:
                     @discord.ui.button(label="⬅ Previous", style=discord.ButtonStyle.secondary, disabled=self.page_idx == 0)
                     async def prev_btn(itx: discord.Interaction, button: discord.ui.Button):
-                        if itx.user.id != self.user.id:
-                            return await itx.response.defer()
-                        self.page_idx -= 1
-                        self._rebuild()
+                        if itx.user.id != self.user.id: return await itx.response.defer()
+                        self.page_idx -= 1; self._rebuild()
                         await itx.response.edit_message(content=self._content(), view=self)
 
                     @discord.ui.button(label="Next ➡", style=discord.ButtonStyle.primary, disabled=self.page_idx >= total_pages - 1)
                     async def next_btn(itx: discord.Interaction, button: discord.ui.Button):
-                        if itx.user.id != self.user.id:
-                            return await itx.response.defer()
-                        self.page_idx += 1
-                        self._rebuild()
+                        if itx.user.id != self.user.id: return await itx.response.defer()
+                        self.page_idx += 1; self._rebuild()
                         await itx.response.edit_message(content=self._content(), view=self)
 
             def _content(self):
@@ -214,7 +190,6 @@ class UserCommands(commands.Cog):
         cur = (current or "").lower()
         matches = [c for c in SUPPORTED_LANGS if cur in c or cur in LANG_META.get(c, ("", ""))[1].lower()]
         return [app_commands.Choice(name=lang_label(c)[:100], value=c) for c in matches[:25]]
-
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
