@@ -1,4 +1,4 @@
-# cogs/admin_commands.py  (UPDATED)
+# cogs/admin_commands.py
 import re
 import discord
 from discord.ext import commands
