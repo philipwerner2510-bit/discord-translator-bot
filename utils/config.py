@@ -1,44 +1,27 @@
-# utils/config.py
-from __future__ import annotations
-import json, os
-from dataclasses import dataclass, field
-from typing import List
+import os
+import json
 
-_DEFAULT_LANGS = [
-    "en","zh","hi","es","fr","ar","bn","pt","ru","ja",
-    "de","jv","ko","vi","mr","ta","ur","tr","it","th",
-    "gu","kn","ml","pa","or","fa","sw","am","ha","yo"
-]
+CONFIG_FILE = os.getenv("BOT_CONFIG_PATH", "config.json")
 
-@dataclass(frozen=True)
-class AppConfig:
-    default_rate_limit: int = 5
-    reaction_timeout: int = 300
-    supported_langs: List[str] = field(default_factory=lambda: list(_DEFAULT_LANGS))
+SUPPORTED_LANGS = []
+CONFIG = None
 
-def _coerce_langs(v) -> List[str]:
-    if isinstance(v, list) and all(isinstance(i, str) for i in v):
-        return [i.lower() for i in v]
-    return list(_DEFAULT_LANGS)
+class Config:
+    def __init__(self, data):
+        self.default_rate_limit = data.get("default_rate_limit", 5)
+        self.reaction_timeout = data.get("reaction_timeout", 300)
 
-def load_config() -> AppConfig:
-    path = os.getenv("BOT_CONFIG_PATH", "config.json")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f) or {}
-    except Exception:
-        data = {}
-    return AppConfig(
-        default_rate_limit=int(data.get("default_rate_limit", 5)),
-        reaction_timeout=int(data.get("reaction_timeout", 300)),
-        supported_langs=_coerce_langs(data.get("supported_langs")),
-    )
-
-CONFIG = load_config()
-SUPPORTED_LANGS = CONFIG.supported_langs
-
-def reload_config():
+def load_config():
     global CONFIG, SUPPORTED_LANGS
-    CONFIG = load_config()
-    SUPPORTED_LANGS = CONFIG.supported_langs
-    return CONFIG
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        CONFIG = Config(data)
+        SUPPORTED_LANGS = data.get("supported_langs", [])
+        print("✅ Config loaded.")
+    except Exception as e:
+        print(f"⚠️ Failed to load config: {e}")
+        CONFIG = Config({})
+        SUPPORTED_LANGS = ["en"]
+
+load_config()
