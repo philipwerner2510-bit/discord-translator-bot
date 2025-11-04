@@ -1,11 +1,14 @@
+# bot.py  (UPDATED)
 import os
 import asyncio
 import discord
-from discord.ext import commands, tasks
-from utils import database
+from discord.ext import commands
 from datetime import datetime, timedelta
 
-BOT_COLOR = 0xde002a  # Bot role color
+from utils import database
+from utils.logging_utils import log_error
+
+BOT_COLOR = 0xDE002A
 PRESENCE_INTERVAL = 300  # 5 minutes
 
 intents = discord.Intents.default()
@@ -16,93 +19,87 @@ intents.guilds = True
 intents.dm_messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-# -----------------------------
-# Track total translations
-# -----------------------------
 bot.total_translations = 0
 
-# -----------------------------
-# Initialize DB and load cogs
-# -----------------------------
-async def main():
-    await database.init_db()
-    async with bot:
-        for ext in ["cogs.user_commands", "cogs.admin_commands", "cogs.translate", "cogs.events"]:
-            try:
-                await bot.load_extension(ext)
-                print(f"✅ Loaded {ext}")
-            except Exception as e:
-                print(f"❌ Failed to load {ext}: {e}")
-        await bot.start(os.environ["BOT_TOKEN"])
+# expose logging to cogs
+async def _log(gid: int | None, msg: str, exc: Exception | None = None, notify: bool = False):
+    await log_error(bot, gid, msg, exc, admin_notify=notify)
+bot.log_error = _log  # type: ignore[attr-defined]
 
-# -----------------------------
-# Sync slash commands
-# -----------------------------
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f"✅ Logged in as {bot.user}")
-    print("Instance is healthy")
-    # Start rich presence loop
-    if not hasattr(bot, "_presence_task"):
-        bot._presence_task = asyncio.create_task(update_presence())
-    # Start daily reset loop
-    if not hasattr(bot, "_daily_reset_task"):
-        bot._daily_reset_task = asyncio.create_task(daily_reset_translations())
-
-# -----------------------------
-# Update rich presence every 5 minutes
-# -----------------------------
-async def update_presence():
+async def _presence_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
-            guild_count = len(bot.guilds)
-            total_trans = getattr(bot, "total_translations", 0)
-            activity = discord.Game(name=f"{guild_count} servers | {total_trans} translations today")
+            activity = discord.Game(name=f"{len(bot.guilds)} servers | {getattr(bot,'total_translations',0)} translations today")
             await bot.change_presence(activity=activity)
         except Exception as e:
-            print(f"⚠️ Presence update failed: {e}")
+            await bot.log_error(None, "Presence update failed", e)
         await asyncio.sleep(PRESENCE_INTERVAL)
 
-# -----------------------------
-# Reset daily translation counter at 00:00 UTC
-# -----------------------------
-async def daily_reset_translations():
+async def _midnight_reset_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
         now = datetime.utcnow()
         next_reset = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        wait_seconds = (next_reset - now).total_seconds()
-        await asyncio.sleep(wait_seconds)
+        await asyncio.sleep(max(1.0, (next_reset - now).total_seconds()))
         bot.total_translations = 0
         print("🔄 Daily translations counter reset")
 
-# -----------------------------
-# Set bot role color on new guilds
-# -----------------------------
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} ({bot.user.id})")
+    print("Instance is healthy")
+    if not hasattr(bot, "_presence_task") or bot._presence_task.done():
+        bot._presence_task = asyncio.create_task(_presence_loop())
+    if not hasattr(bot, "_midnight_task") or bot._midnight_task.done():
+        bot._midnight_task = asyncio.create_task(_midnight_reset_loop())
+
+class MyBot(commands.Bot):
+    async def setup_hook(self) -> None:
+        await database.init_db()
+        for ext in ("cogs.user_commands", "cogs.admin_commands", "cogs.translate", "cogs.events"):
+            try:
+                await bot.load_extension(ext)
+                print(f"✅ Loaded {ext}")
+            except Exception as e:
+                await bot.log_error(None, f"Failed to load {ext}", e, notify=True)
+        try:
+            await bot.tree.sync()  # global sync; for fast dev use guild sync instead
+            print("✅ Slash commands synced")
+        except Exception as e:
+            await bot.log_error(None, "Slash command sync failed", e, notify=True)
+
+bot.__class__ = MyBot  # swap class to use setup_hook()
+
 @bot.event
 async def on_guild_join(guild: discord.Guild):
-    bot_member = guild.me or await guild.fetch_member(bot.user.id)
-    if not bot_member:
+    me = guild.me or await guild.fetch_member(bot.user.id)
+    if not me:
         return
-    bot_role = bot_member.top_role
+    role = me.top_role
+    if not role or role.managed:
+        return
     try:
-        await bot_role.edit(color=discord.Color(BOT_COLOR), reason="Set initial bot role color")
-        print(f"🎨 Bot role color set automatically in new guild '{guild.name}'")
+        await role.edit(color=discord.Color(BOT_COLOR), reason="Set initial bot role color")
+        print(f"🎨 Set bot role color in '{guild.name}'")
+    except discord.Forbidden:
+        pass
     except Exception as e:
-        print(f"⚠️ Failed to set bot role color in new guild '{guild.name}': {e}")
+        await bot.log_error(guild.id, "Failed to set bot role color", e)
 
-# -----------------------------
-# Test command
-# -----------------------------
 @bot.tree.command(name="test", description="Test if interactions work")
 async def test(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Test command works!", ephemeral=True)
 
-# -----------------------------
-# Run bot
-# -----------------------------
+async def amain():
+    token = os.getenv("BOT_TOKEN")
+    if not token:
+        raise RuntimeError("Missing BOT_TOKEN environment variable.")
+    async with bot:
+        await bot.start(token)
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(amain())
+    except KeyboardInterrupt:
+        pass
