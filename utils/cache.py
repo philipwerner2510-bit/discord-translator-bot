@@ -1,57 +1,58 @@
+# utils/cache.py  (UPDATED)
 import asyncio
-import time
+import hashlib
+from time import monotonic
+from collections import OrderedDict
+from typing import Tuple, Optional, Callable, Awaitable
+
+ResultT = Tuple[str, str]  # (translated_text, detected_lang)
 
 class TranslationCache:
-    """
-    A simple in-memory cache for translations with TTL (time-to-live).
-    Prevents repeated calls to translation APIs for the same text/language.
-    """
-
-    def __init__(self, ttl: int = 300):
-        """
-        Parameters:
-        - ttl: time-to-live in seconds for cached entries
-        """
+    """TTL + size-bounded LRU cache for translation results."""
+    def __init__(self, ttl: int = 300, max_entries: int = 2000):
         self.ttl = ttl
-        self.cache = {}  # key: (text, target_lang), value: (translation, timestamp)
-        self.lock = asyncio.Lock()
+        self.max_entries = max_entries
+        self._store: "OrderedDict[str, Tuple[ResultT, float]]" = OrderedDict()
+        self._lock = asyncio.Lock()
 
-    async def get(self, text: str, target_lang: str):
-        """
-        Returns cached translation if exists and not expired, else None.
-        """
-        key = (text, target_lang)
-        async with self.lock:
-            if key in self.cache:
-                translation, timestamp = self.cache[key]
-                if time.time() - timestamp < self.ttl:
-                    return translation
-                else:
-                    # expired
-                    del self.cache[key]
-            return None
+    @staticmethod
+    def _key(text: str, target_lang: str) -> str:
+        norm = " ".join((text or "").split()).casefold()
+        h = hashlib.sha256(norm.encode("utf-8")).hexdigest()
+        return f"{h}:{target_lang.lower()}"
 
-    async def set(self, text: str, target_lang: str, translation: str):
-        """
-        Stores a translation in the cache.
-        """
-        key = (text, target_lang)
-        async with self.lock:
-            self.cache[key] = (translation, time.time())
+    async def get(self, text: str, target_lang: str) -> Optional[ResultT]:
+        k = self._key(text, target_lang)
+        async with self._lock:
+            item = self._store.get(k)
+            if not item:
+                return None
+            value, ts = item
+            if monotonic() - ts >= self.ttl:
+                self._store.pop(k, None)
+                return None
+            self._store.move_to_end(k, last=True)
+            return value
 
-    async def clear(self):
-        """
-        Clears the entire cache.
-        """
-        async with self.lock:
-            self.cache.clear()
+    async def set(self, text: str, target_lang: str, value: ResultT) -> None:
+        k = self._key(text, target_lang)
+        async with self._lock:
+            self._store[k] = (value, monotonic())
+            self._store.move_to_end(k, last=True)
+            while len(self._store) > self.max_entries:
+                self._store.popitem(last=False)
 
-    async def cleanup(self):
-        """
-        Removes expired entries from cache.
-        """
-        async with self.lock:
-            now = time.time()
-            keys_to_delete = [key for key, (_, ts) in self.cache.items() if now - ts >= self.ttl]
-            for key in keys_to_delete:
-                del self.cache[key]
+    async def get_or_set(self, text: str, target_lang: str, compute: Callable[[], Awaitable[ResultT]]) -> ResultT:
+        v = await self.get(text, target_lang)
+        if v is not None:
+            return v
+        v = await compute()
+        await self.set(text, target_lang, v)
+        return v
+
+    async def cleanup(self) -> None:
+        async with self._lock:
+            now = monotonic()
+            ks = [k for k, (_, ts) in self._store.items() if now - ts >= self.ttl]
+            for k in ks:
+                self._store.pop(k, None)
