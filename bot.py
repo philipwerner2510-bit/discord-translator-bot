@@ -1,117 +1,50 @@
+# bot.py
 import os
 import asyncio
+import traceback
 from datetime import datetime, timedelta
 
 import discord
 from discord.ext import commands
 
-# -----------------------------
-# Intents
-# -----------------------------
+from utils import database
+
+BOT_COLOR = 0xDE002A
+PRESENCE_INTERVAL = 300  # 5 minutes
+
 intents = discord.Intents.default()
-intents.guilds = True
+intents.message_content = True
 intents.messages = True
 intents.reactions = True
-intents.message_content = True
+intents.guilds = True
 intents.dm_messages = True
 
-# -----------------------------
-# Bot
-# -----------------------------
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# -----------------------------
-# Runtime counters (reset on restart)
-# -----------------------------
+# Runtime counters (reset daily at 00:00 UTC)
 bot.total_translations = 0
-bot.cached_translations = 0
+bot.libre_translations = 0
+bot.ai_translations = 0
 bot.cache_hits = 0
 bot.cache_misses = 0
-bot.ai_translations = 0
-bot.libre_translations = 0
-
-# Color & presence
-BOT_COLOR = 0xDE002A
-PRESENCE_INTERVAL = 300  # seconds
-
-# Optional: speed up dev by syncing to a specific guild first (string ID)
-DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")  # e.g. "1425585153585189067"
-
 
 # -----------------------------
-# Local slash: /test
+# Extensions to load
 # -----------------------------
-@bot.tree.command(name="test", description="Quick check that the bot is alive and commands are synced.")
-async def test_cmd(interaction: discord.Interaction):
-    await interaction.response.send_message("✅ Test command works!", ephemeral=True)
-
-
-# -----------------------------
-# Cog loader & runner
-# -----------------------------
-async def run():
-    cogs = [
-        "cogs.user_commands",
-        "cogs.admin_commands",
-        "cogs.translate",
-        "cogs.events",
-        "cogs.ops_commands",
-        "cogs.analytics_commands",  # keep if present
-        "cogs.welcome",             # keep if present
-        "cogs.owner_commands",
-    ]
-    for ext in cogs:
-        try:
-            await bot.load_extension(ext)
-            print(f"✅ Loaded {ext}")
-        except Exception as e:
-            print(f"❌ Failed to load {ext}: {e}")
-
-    token = os.environ.get("BOT_TOKEN")
-    if not token:
-        raise RuntimeError("BOT_TOKEN env var is missing.")
-    await bot.start(token)
-
+EXTENSIONS = [
+    "cogs.user_commands",
+    "cogs.admin_commands",
+    "cogs.translate",
+    "cogs.events",
+    "cogs.ops_commands",
+    "cogs.analytics_commands",
+    "cogs.welcome",
+    "cogs.owner_commands",  # keep last so failures here don't block others
+]
 
 # -----------------------------
-# Slash sync + background loops
+# Presence loop (every 5 min)
 # -----------------------------
-@bot.event
-async def on_ready():
-    # ✅ Dependency version check (OpenAI + httpx)
-    try:
-        import httpx, openai
-        print(f"✅ Dependencies: openai={openai.__version__} | httpx={httpx.__version__}")
-    except Exception as e:
-        print(f"⚠️ Dependency version check failed: {e}")
-
-    bot.start_time = getattr(bot, "start_time", datetime.utcnow())
-
-    # Per-guild dev sync (if provided), then global sync
-    try:
-        if DEV_GUILD_ID:
-            gid = int(DEV_GUILD_ID)
-            guild = discord.Object(id=gid)
-            synced = await bot.tree.sync(guild=guild)
-            print(f"🔧 Synced commands to guild {gid} ({len(synced)} cmds)")
-        synced_global = await bot.tree.sync()
-        print(f"🌍 Global slash commands synced ({len(synced_global)} cmds)")
-    except Exception as e:
-        print(f"⚠️ Command sync failed: {e}")
-
-    print(f"✅ Logged in as {bot.user} ({bot.user.id})")
-
-    # Presence loop
-    if not getattr(bot, "_presence_task", None):
-        bot._presence_task = asyncio.create_task(presence_loop())
-
-    # Daily counter reset (translations today)
-    if not getattr(bot, "_daily_reset_task", None):
-        bot._daily_reset_task = asyncio.create_task(daily_reset())
-
-    print("Instance is healthy ✅")
-
-
 async def presence_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
@@ -124,19 +57,92 @@ async def presence_loop():
             print(f"⚠️ Presence update failed: {e}")
         await asyncio.sleep(PRESENCE_INTERVAL)
 
-
-async def daily_reset():
+# -----------------------------
+# Daily reset at 00:00 UTC
+# -----------------------------
+async def reset_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
         now = datetime.utcnow()
         next_reset = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        await asyncio.sleep(max(1, (next_reset - now).total_seconds()))
+        await asyncio.sleep((next_reset - now).total_seconds())
         bot.total_translations = 0
-        print("🔄 Daily translations counter reset")
-
+        bot.libre_translations = 0
+        bot.ai_translations = 0
+        bot.cache_hits = 0
+        bot.cache_misses = 0
+        print("🔄 Daily counters reset")
 
 # -----------------------------
-# Entry
+# on_ready: sync commands & start loops
+# -----------------------------
+@bot.event
+async def on_ready():
+    # Sync global commands
+    try:
+        await bot.tree.sync()
+        print("🌍 Global slash commands synced")
+    except Exception as e:
+        print(f"❌ Global sync failed: {type(e).__name__}: {e}")
+        traceback.print_exc()
+
+    print(f"✅ Logged in as {bot.user} ({bot.user.id})")
+
+    # Start background tasks once
+    if not getattr(bot, "_presence_task", None):
+        bot._presence_task = asyncio.create_task(presence_loop())
+    if not getattr(bot, "_reset_task", None):
+        bot._reset_task = asyncio.create_task(reset_loop())
+
+# -----------------------------
+# Diagnostics helper
+# -----------------------------
+def print_dependency_versions():
+    try:
+        import openai  # type: ignore
+        import httpx   # type: ignore
+        print(f"✅ Dependencies: openai={getattr(openai, '__version__', 'unknown')} | httpx={getattr(httpx, '__version__', 'unknown')}")
+    except Exception as e:
+        print(f"⚠️ Could not read dependency versions: {e}")
+
+def print_config_preview():
+    libre_base = os.getenv("LIBRE_BASE")
+    openai_model = os.getenv("OPENAI_MODEL")
+    print("✅ Config loaded.")
+    if libre_base:
+        print(f"• LIBRE_BASE={libre_base}")
+    if openai_model:
+        print(f"• OPENAI_MODEL={openai_model}")
+
+# -----------------------------
+# Main: init DB, load cogs, run
+# -----------------------------
+async def main():
+    print_config_preview()
+    await database.init_db()
+
+    async with bot:
+        for ext in EXTENSIONS:
+            try:
+                await bot.load_extension(ext)
+                print(f"✅ Loaded {ext}")
+            except Exception as e:
+                print(f"❌ Failed to load {ext}: {type(e).__name__}: {e}")
+                traceback.print_exc()
+
+        # Token required
+        token = os.environ.get("BOT_TOKEN")
+        if not token:
+            raise RuntimeError("BOT_TOKEN is not set")
+
+        print_dependency_versions()
+        await bot.start(token)
+
+# -----------------------------
+# Entrypoint
 # -----------------------------
 if __name__ == "__main__":
-    asyncio.run(run())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("🛑 Shutting down")
