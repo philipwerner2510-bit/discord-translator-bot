@@ -1,4 +1,4 @@
-# bot.py  (UPDATED)
+# bot.py
 import os
 import asyncio
 import discord
@@ -20,6 +20,7 @@ intents.dm_messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 bot.total_translations = 0
+bot.start_time = datetime.utcnow()
 
 # expose logging to cogs
 async def _log(gid: int | None, msg: str, exc: Exception | None = None, notify: bool = False):
@@ -30,7 +31,9 @@ async def _presence_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
-            activity = discord.Game(name=f"{len(bot.guilds)} servers | {getattr(bot,'total_translations',0)} translations today")
+            activity = discord.Game(
+                name=f"{len(bot.guilds)} servers | {getattr(bot,'total_translations',0)} translations today"
+            )
             await bot.change_presence(activity=activity)
         except Exception as e:
             await bot.log_error(None, "Presence update failed", e)
@@ -57,7 +60,13 @@ async def on_ready():
 class MyBot(commands.Bot):
     async def setup_hook(self) -> None:
         await database.init_db()
-        for ext in ("cogs.user_commands", "cogs.admin_commands", "cogs.translate", "cogs.events"):
+        for ext in (
+            "cogs.user_commands",
+            "cogs.admin_commands",
+            "cogs.translate",
+            "cogs.events",
+            "cogs.ops_commands",
+        ):
             try:
                 await bot.load_extension(ext)
                 print(f"✅ Loaded {ext}")
@@ -69,7 +78,7 @@ class MyBot(commands.Bot):
         except Exception as e:
             await bot.log_error(None, "Slash command sync failed", e, notify=True)
 
-bot.__class__ = MyBot  # swap class to use setup_hook()
+bot.__class__ = MyBot  # use setup_hook()
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
