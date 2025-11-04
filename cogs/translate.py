@@ -19,6 +19,11 @@ LIBRE_URL = "https://libretranslate.de/translate"
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
 
 
+def chunk_list(seq, size):
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
 class Translate(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -32,7 +37,7 @@ class Translate(commands.Cog):
     @app_commands.describe(text="Message to translate", target_lang="2-letter language code")
     async def cmd_translate(self, interaction: discord.Interaction, text: str, target_lang: str):
         await interaction.response.defer(ephemeral=True)
-        target_lang = target_lang.lower()
+        target_lang = (target_lang or "").lower()
         if target_lang not in SUPPORTED_LANGS:
             return await interaction.followup.send(
                 f"❌ Unsupported language `{target_lang}`. Supported: {', '.join(SUPPORTED_LANGS)}",
@@ -81,25 +86,24 @@ class Translate(commands.Cog):
             try:
                 await message.add_reaction(em)
                 return True
-            except:
+            except Exception:
                 m = CUSTOM_EMOJI_RE.match(str(em))
-                if not m: return False
+                if not m:
+                    return False
                 a, name, eid = m.groups()
                 try:
                     partial = discord.PartialEmoji(name=name, animated=bool(a), id=int(eid))
                     await message.add_reaction(partial)
                     return True
-                except:
+                except Exception:
                     return False
 
         ok = await _try(emote)
-        if not ok:
-            fallback = "🔃"
-            if fallback != emote:
-                await _try(fallback)
+        if not ok and emote != "🔃":
+            await _try("🔃")
 
     # --------------------------
-    # Reaction triggers DM menu
+    # Reaction flow
     # --------------------------
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
@@ -136,12 +140,13 @@ class Translate(commands.Cog):
         if str(reaction.emoji) != configured:
             return
 
+        # If user already set a language, translate immediately (skip picker)
         user_lang = await database.get_user_lang(user.id)
-        server_lang = await database.get_server_lang(gid)
-        target = (user_lang or server_lang or "en").lower()
-        if target not in SUPPORTED_LANGS:
-            target = "en"
+        if user_lang and user_lang.lower() in SUPPORTED_LANGS:
+            await self.send_translation(msg, user, user_lang.lower())
+            return
 
+        # Otherwise prompt with a paginated picker (≤25 options per page)
         try:
             await self.prompt_language_choice(msg, user)
         except discord.Forbidden:
@@ -150,40 +155,85 @@ class Translate(commands.Cog):
             await log_error(self.bot, gid, "Prompt send failed", e, admin_notify=True)
 
     # --------------------------
-    # Popup UI for language selection
+    # Paginated language picker
     # --------------------------
     async def prompt_language_choice(self, msg: discord.Message, user: discord.User):
+        PER_PAGE = 25
+        pages = list(chunk_list(SUPPORTED_LANGS, PER_PAGE))
+        total_pages = len(pages)
+
         class LangView(discord.ui.View):
-            def __init__(self, outer, message, requester):
+            def __init__(self, outer, message, requester, page_idx=0):
                 super().__init__(timeout=45)
                 self.outer = outer
                 self.msg = message
                 self.user = requester
+                self.page_idx = page_idx
+                self._build()
 
-            @discord.ui.select(
-                placeholder="Choose translation language",
-                min_values=1,
-                max_values=1,
-                options=[
-                    discord.SelectOption(label=f"{code}", value=code) 
-                    for code in SUPPORTED_LANGS
-                ]
-            )
-            async def select_lang(self, interaction: discord.Interaction, select):
-                if interaction.user.id != self.user.id:
-                    return await interaction.response.defer()
-                lang = select.values[0]
-                await interaction.response.defer(ephemeral=True)
-                await self.outer.send_translation(self.msg, self.user, lang)
-                self.stop()
+            def _build(self):
+                # clear existing children before rebuilding (for page switches)
+                self.clear_items()
 
-        try:
-            await user.send(
-                "Pick a translation language 👇",
-                view=LangView(self, msg, user)
-            )
-        except Exception as e:
-            raise e
+                current_page = pages[self.page_idx]
+                placeholder = f"Choose language — Page {self.page_idx + 1}/{total_pages}"
+
+                # Select with up to 25 options
+                select = discord.ui.Select(
+                    placeholder=placeholder,
+                    min_values=1,
+                    max_values=1,
+                    options=[discord.SelectOption(label=code, value=code) for code in current_page]
+                )
+
+                async def on_select(interaction: discord.Interaction):
+                    if interaction.user.id != self.user.id:
+                        return await interaction.response.defer()
+                    lang = select.values[0]
+                    await interaction.response.defer(ephemeral=True)
+                    # Save language for next time
+                    try:
+                        await database.set_user_lang(self.user.id, lang)
+                    except Exception:
+                        pass
+                    await self.outer.send_translation(self.msg, self.user, lang)
+                    self.stop()
+
+                select.callback = on_select
+                self.add_item(select)
+
+                # Prev/Next page buttons if multiple pages
+                if total_pages > 1:
+                    @discord.ui.button(label="Prev", style=discord.ButtonStyle.secondary, disabled=self.page_idx == 0)
+                    async def prev_btn(interaction: discord.Interaction, button: discord.ui.Button):
+                        if interaction.user.id != self.user.id:
+                            return await interaction.response.defer()
+                        self.page_idx -= 1
+                        self._build()
+                        await interaction.response.edit_message(content=self._content_text(), view=self)
+
+                    @discord.ui.button(label="Next", style=discord.ButtonStyle.primary, disabled=self.page_idx >= total_pages - 1)
+                    async def next_btn(interaction: discord.Interaction, button: discord.ui.Button):
+                        if interaction.user.id != self.user.id:
+                            return await interaction.response.defer()
+                        self.page_idx += 1
+                        self._build()
+                        await interaction.response.edit_message(content=self._content_text(), view=self)
+
+                    # add the buttons we just defined
+                    # (discord.py registers them via decorators; we need to bind them)
+                    # The decorators already added them, so nothing else to do.
+
+            def _content_text(self):
+                preview = (self.msg.content or "")[:60]
+                if len(self.msg.content or "") > 60:
+                    preview += "…"
+                return f"Pick a translation language for:\n> {preview}"
+
+        await user.send(
+            content=LangView._content_text(LangView(self, msg, user)),  # call method statically with temp instance
+            view=LangView(self, msg, user)
+        )
 
     # --------------------------
     # Perform + DM translation
@@ -194,17 +244,23 @@ class Translate(commands.Cog):
 
         emb = discord.Embed(description=translated, color=0xDE002A)
         emb.set_author(name=msg.author.display_name, icon_url=msg.author.display_avatar.url)
-        emb.add_field(
-            name="Original",
-            value=f"[Jump to message]({msg.jump_url})",
-            inline=False
-        )
+        emb.add_field(name="Original", value=f"[Jump to message]({msg.jump_url})", inline=False)
         emb.set_footer(text=f"{msg.created_at:%H:%M UTC} | {target} | From: {detected}")
 
-        await user.send(embed=emb)
+        try:
+            await user.send(embed=emb)
+        except discord.Forbidden:
+            try:
+                await msg.channel.send(f"⚠️ I can’t DM {user.mention}. (Privacy settings)", delete_after=8)
+            except Exception:
+                pass
 
-        await database.increment_user_counter(user.id, 1)
-        await database.increment_guild_counter(msg.guild.id, 1)
+        try:
+            await database.increment_user_counter(user.id, 1)
+            await database.increment_guild_counter(msg.guild.id, 1)
+        except Exception as e:
+            await log_error(self.bot, msg.guild.id, "Stats increment failed", e, admin_notify=False)
+
         self.bot.total_translations += 1
 
     # --------------------------
@@ -232,7 +288,7 @@ class Translate(commands.Cog):
                         src = data.get("detectedLanguage", "auto")
                         await CACHE.set(text, target, (out, src))
                         return out, src
-        except:
+        except Exception:
             pass
 
         # Google fallback
@@ -242,7 +298,7 @@ class Translate(commands.Cog):
             src = res.src
             await CACHE.set(text, target, (out, src))
             return out, src
-        except Exception as e:
+        except Exception:
             return text, "unknown"
 
 
