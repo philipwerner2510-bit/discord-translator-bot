@@ -1,101 +1,119 @@
+# cogs/user_commands.py
+import os
 import discord
 from discord.ext import commands
 from discord import app_commands
-from utils import database
 
-BOT_COLOR = 0xde002a
-OWNER_ID = 762267166031609858
+BOT_COLOR = 0xDE002A
+OWNER_ID = 762267166031609858  # Polarix1954
 
-SUPPORTED_LANGS = ["en","de","es","fr","it","ja","ko","zh"]
+def build_invite_url(app_id: int) -> str:
+    # Administrator is not required; these perms cover reading, reacting, embeds, DMs
+    perms = 274878188544  # Send Messages, Embed Links, Read Message History, Add Reactions, Use App Commands, etc.
+    return f"https://discord.com/oauth2/authorize?client_id={app_id}&permissions={perms}&scope=bot%20applications.commands"
 
 
 class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # ✅ Set My Language (UI)
-    @app_commands.command(name="setmylang", description="Choose your personal translation language.")
-    async def setmylang(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+    # -----------------------
+    # /help — user-facing guide (ephemeral)
+    # -----------------------
+    @app_commands.command(name="help", description="How to use Demon Translator.")
+    async def help_cmd(self, interaction: discord.Interaction):
+        app_id = self.bot.user.id if self.bot.user else 0
+        invite_url = build_invite_url(app_id)
 
-        options = [
-            discord.SelectOption(label="English", value="en", emoji="🇬🇧"),
-            discord.SelectOption(label="German", value="de", emoji="🇩🇪"),
-            discord.SelectOption(label="Spanish", value="es", emoji="🇪🇸"),
-            discord.SelectOption(label="French", value="fr", emoji="🇫🇷"),
-            discord.SelectOption(label="Italian", value="it", emoji="🇮🇹"),
-            discord.SelectOption(label="Japanese", value="ja", emoji="🇯🇵"),
-            discord.SelectOption(label="Korean", value="ko", emoji="🇰🇷"),
-            discord.SelectOption(label="Chinese", value="zh", emoji="🇨🇳"),
-        ]
-
-        select = discord.ui.Select(
-            placeholder="Select your language 🌍",
-            options=options
-        )
-        view = discord.ui.View()
-        view.add_item(select)
-
-        async def cb(inter):
-            lang = select.values[0]
-            await database.set_user_lang(inter.user.id, lang)
-            await inter.response.send_message(
-                f"✅ Language updated to `{lang}`!",
-                ephemeral=True
-            )
-
-        select.callback = cb
-        await interaction.followup.send("🌍 Pick your language:", view=view, ephemeral=True)
-
-    # ✅ Public Info & Help
-    @app_commands.command(name="help", description="Show user guide.")
-    async def help(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="📖 Demon Translator Help",
-            description="How to use me:",
-            color=BOT_COLOR
+            title="📖 Demon Translator — Quick Help",
+            color=BOT_COLOR,
+            description=(
+                "Use me to translate messages **instantly**:\n\n"
+                "1) **React** to any message with the bot's emote to translate it.\n"
+                "2) Choose your language via **/setmylang** (dropdown UI).\n"
+                "3) Use **/translate** to translate any custom text.\n\n"
+                "I use **LibreTranslate** for normal texts (fast & free) and **AI (GPT-4o mini)** "
+                "for slang, long, or complex messages — so results feel natural 😈"
+            )
         )
         embed.add_field(
-            name="✅ Step 1",
-            value="Use `/setmylang` to select your language.",
+            name="Useful Commands",
+            value=(
+                "• `/setmylang` — pick your personal language (dropdown)\n"
+                "• `/translate <text>` — manual translation (AI quality)\n"
+                "• `/ping` — check if I'm alive\n"
+                "• Admins: `/aisettings`, `/settings`, `/channelselection`, `/defaultlang`\n"
+            ),
             inline=False
         )
         embed.add_field(
-            name="✅ Step 2",
-            value="React with the bot's emote to translate messages!",
+            name="Tips",
+            value=(
+                "• If you don't receive a DM, I’ll reply in the channel.\n"
+                "• Admins can set an error channel with `/seterrorchannel` to get AI budget warnings.\n"
+                "• I cache translations for 24h to save tokens & speed things up."
+            ),
             inline=False
         )
-        embed.add_field(
-            name="💡 Admin Controls",
-            value="Admins can use `/aisettings`, `/settings`, `/channelselection`, `/defaultlang`",
-            inline=False
-        )
-        embed.set_footer(text="Bot created by Polarix1954 😈🔥")
+        embed.set_footer(text="Demon Translator © by Polarix1954 😈🔥")
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(label="➕ Invite Me", url=invite_url, style=discord.ButtonStyle.link))
 
-    # ✅ Quick connection test
-    @app_commands.command(name="ping", description="Check bot response time.")
-    async def ping(self, interaction: discord.Interaction):
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    # -----------------------
+    # /ping — latency check
+    # -----------------------
+    @app_commands.command(name="ping", description="Check bot latency.")
+    async def ping_cmd(self, interaction: discord.Interaction):
         await interaction.response.send_message(f"🏓 Pong! {round(self.bot.latency * 1000)}ms", ephemeral=True)
 
-    # ✅ Owner-only AI test command
-    @app_commands.command(name="aitest", description="Test AI translation (Owner Only)")
-    async def aitest(self, interaction: discord.Interaction):
+    # -----------------------
+    # /aitest — owner-only quick AI demo
+    # -----------------------
+    @app_commands.command(name="aitest", description="Owner-only: Run a quick AI translation demo.")
+    async def aitest_cmd(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_ID:
             return await interaction.response.send_message("❌ Owner only.", ephemeral=True)
 
-        example_text = "Nah bro that’s cap, ain’t no way he pulled that W 💀🔥"
-        target = "de"
+        from openai import OpenAI
+        key = os.getenv("OPENAI_API_KEY")
+        if not key:
+            return await interaction.response.send_message("⚠️ No OPENAI_API_KEY set.", ephemeral=True)
 
-        embed = discord.Embed(
-            title="🧪 AI Translation Test",
-            description=f"Translating: `{example_text}`",
-            color=BOT_COLOR
-        )
-        embed.set_footer(text="Demon Translator AI — GPT-4o Mini Mode")
+        await interaction.response.defer(ephemeral=True)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        client = OpenAI(api_key=key)
+        sample = "Nah bro that’s cap, ain’t no way he pulled that W 💀🔥"
+        target_lang = "de"
+
+        try:
+            resp = await interaction.client.loop.run_in_executor(
+                None,
+                lambda: client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": f"Translate the user's message to '{target_lang}'. "
+                                                      f"Preserve tone, slang and emojis. Return only the translation."},
+                        {"role": "user", "content": sample},
+                    ],
+                    temperature=0.2,
+                )
+            )
+            out = resp.choices[0].message.content.strip()
+
+            embed = discord.Embed(
+                title="🧪 AI Translation Demo",
+                color=BOT_COLOR,
+                description=f"**Source:** `{sample}`\n**→ {target_lang.upper()}:** {out}"
+            )
+            embed.set_footer(text="Engine: GPT-4o mini")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            await interaction.followup.send(f"❌ AI demo failed: `{e}`", ephemeral=True)
 
 
 async def setup(bot):
