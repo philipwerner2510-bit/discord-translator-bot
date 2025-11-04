@@ -5,6 +5,7 @@ import asyncio
 import aiohttp
 import discord
 from discord.ext import commands
+from discord import app_commands
 
 from utils.cache import TranslationCache
 from utils import database
@@ -37,9 +38,11 @@ LANG_CATALOG = [
     ("xh","🇿🇦","Xhosa"), ("fil","🇵🇭","Filipino"),
 ]
 SUPPORTED_LANGS = {code for code,_,_ in LANG_CATALOG}
+LANG_LOOKUP = {code: (flag, name) for code, flag, name in LANG_CATALOG}
 
 # Libre works best for this subset; everything else will prefer AI.
-LIBRE_GOOD = {"en","de","fr","es","it","pt","ru","zh","ja","ko","tr","nl","sv","no","da","fi","pl","cs","el","uk","ro","bg","he","ar","vi","th","id","ms"}
+LIBRE_GOOD = {"en","de","fr","es","it","pt","ru","zh","ja","ko","tr","nl","sv","no","da","fi",
+              "pl","cs","el","uk","ro","bg","he","ar","vi","th","id","ms"}
 
 # Slang/emoji heuristic
 SLANG_WORDS = {
@@ -138,11 +141,101 @@ async def openai_translate(text: str, target_lang: str) -> tuple[str | None, int
     except Exception as e:
         return None, 0, 0.0, f"exception:{type(e).__name__}"
 
+# ---------- Slash: /translate with autocomplete ----------
+def _filter_lang_choices(current: str):
+    q = (current or "").strip().lower()
+    items = []
+    for code, flag, name in LANG_CATALOG:
+        label = f"{flag} {name} ({code})"
+        hay = f"{code} {name}".lower()
+        if not q or q in hay:
+            items.append(app_commands.Choice(name=label[:100], value=code))
+        if len(items) >= 25:
+            break
+    # If nothing matched, still show the first page
+    return items or [app_commands.Choice(name=f"{flag} {name} ({code})"[:100], value=code)
+                     for code, flag, name in LANG_CATALOG[:25]]
+
 class Translate(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._inflight = set()
 
+    # --- Autocomplete provider for target_lang
+    @app_commands.autocomplete(target_lang=lambda i, c: _filter_lang_choices(c.value))
+    @app_commands.command(name="translate", description="Translate text to a chosen language (with autocomplete).")
+    @app_commands.describe(text="What should I translate?", target_lang="Pick a language (type to search)")
+    async def translate_cmd(self, interaction: discord.Interaction, text: str, target_lang: str):
+        await interaction.response.defer(ephemeral=False, thinking=True)
+
+        target_lang = (target_lang or "en").lower()
+        if target_lang not in SUPPORTED_LANGS:
+            return await interaction.followup.send("❌ Unsupported language. Try picking from the list.", ephemeral=True)
+
+        # Cache first
+        cached = await cache.get(text, target_lang)
+        if cached:
+            translated = cached
+            self.bot.cached_translations += 1
+            self.bot.cache_hits += 1
+        else:
+            self.bot.cache_misses += 1
+            ai_enabled = await database.get_ai_enabled(interaction.guild.id) if interaction.guild else True
+            force_ai = needs_ai(text)
+            translated = None
+            used_ai = False
+            libre_reason = "skipped"
+            ai_reason = "skipped"
+
+            prefer_libre = (target_lang in LIBRE_GOOD) and not force_ai
+
+            if prefer_libre:
+                translated, libre_reason = await libre_translate(text, target_lang)
+                if translated:
+                    self.bot.libre_translations += 1
+                elif ai_enabled:
+                    translated, _, _, ai_reason = await openai_translate(text, target_lang)
+                    used_ai = translated is not None
+            else:
+                if ai_enabled:
+                    translated, _, _, ai_reason = await openai_translate(text, target_lang)
+                    used_ai = translated is not None
+                if translated is None:
+                    translated, libre_reason = await libre_translate(text, target_lang)
+                    if translated:
+                        self.bot.libre_translations += 1
+
+            if translated is None:
+                await log_error(
+                    self.bot, interaction.guild.id if interaction.guild else 0,
+                    f"/translate failed. libre={libre_reason} ai={ai_reason} (enabled={ai_enabled})"
+                )
+                return await interaction.followup.send(
+                    "⚠️ I couldn't translate this right now. Try again or contact an admin.",
+                    ephemeral=True
+                )
+
+            if used_ai:
+                self.bot.ai_translations += 1
+                _, eur = await database.get_current_ai_usage()
+                if eur >= AI_COST_CAP_EUR and interaction.guild:
+                    await database.set_ai_enabled(interaction.guild.id, False)
+                    ch_id = await database.get_error_channel(interaction.guild.id)
+                    if ch_id and (ch := interaction.guild.get_channel(ch_id)):
+                        await ch.send("🔴 AI disabled — monthly cap reached. Using Libre only.")
+                elif eur >= AI_WARN_AT_EUR and interaction.guild:
+                    ch_id = await database.get_error_channel(interaction.guild.id)
+                    if ch_id and (ch := interaction.guild.get_channel(ch_id)):
+                        await ch.send(f"⚠️ AI usage **€{eur:.2f}/€{AI_COST_CAP_EUR:.2f}**. Switching to Libre soon.")
+
+            await cache.set(text, target_lang, translated)
+
+        flag, name = LANG_LOOKUP.get(target_lang, ("🏳️", target_lang))
+        embed = discord.Embed(description=translated, color=BOT_COLOR)
+        embed.set_author(name=f"→ {name} ({target_lang}) {flag}")
+        await interaction.followup.send(embed=embed)
+
+    # ---------- React flow ----------
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -193,7 +286,7 @@ class Translate(commands.Cog):
             return
 
         key = (reaction.message.id, user.id)
-        if key in self._inflight:
+        if hasattr(self, "_inflight") and key in self._inflight:
             return
         self._inflight.add(key)
 
