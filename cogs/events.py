@@ -1,4 +1,4 @@
-# cogs/events.py  (UPDATED minimal delegator; safe to keep or remove)
+# cogs/events.py
 import discord
 from discord.ext import commands
 
@@ -6,7 +6,7 @@ class Events(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # Keep classic event to support any existing behavior; Translate cog handles raw itself.
+    # Minimal delegator (Translate cog handles raw reaction itself)
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction, user):
         cog = self.bot.get_cog("Translate")
