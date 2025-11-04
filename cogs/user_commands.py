@@ -9,12 +9,11 @@ OWNER_ID = 762267166031609858  # Polarix1954
 
 
 def build_invite_url(app_id: int) -> str:
-    # Permissions: Send Messages, Embed Links, Read Message History, Add Reactions, Use App Commands, etc.
     perms = 274878188544
     return f"https://discord.com/oauth2/authorize?client_id={app_id}&permissions={perms}&scope=bot%20applications.commands"
 
 
-# ---------- Optional: lazy OpenAI client for /aitest ----------
+# Optional: lazy OpenAI client for /aitest
 from openai import OpenAI
 _oai_client = None
 def get_oai_client():
@@ -30,7 +29,7 @@ def get_oai_client():
     return _oai_client
 
 
-# ---------- Embeds (polished & structured) ----------
+# ---------- Embeds ----------
 def embed_user() -> discord.Embed:
     e = discord.Embed(
         title="👋 Demon Translator — User Guide",
@@ -176,34 +175,29 @@ class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # -----------------------
-    # /help — Tabbed view (User / Admin / Owner) with proper visibility
-    # -----------------------
+    # /help — Tabbed view (User / Admin / Owner) with robust visibility
     @app_commands.command(name="help", description="Interactive help: User, Admin, and Owner tabs.")
     async def help_cmd(self, interaction: discord.Interaction):
         app_id = self.bot.user.id if self.bot.user else 0
         invite_url = build_invite_url(app_id)
 
-        # Visibility rules
-        is_owner = interaction.user.id == OWNER_ID
+        # Robust visibility detection:
+        # - In guild: Interaction.user is a Member with guild_permissions
+        # - In DM: Interaction.user is a User (no guild); admin must be False
+        is_owner = (interaction.user.id == OWNER_ID)
         is_admin = False
-        if interaction.guild and interaction.guild.get_member(interaction.user.id):
-            member = interaction.guild.get_member(interaction.user.id)
-            is_admin = member.guild_permissions.administrator
+        if interaction.guild and isinstance(interaction.user, discord.Member):
+            is_admin = interaction.user.guild_permissions.administrator
 
         view = HelpView(show_admin=is_admin, show_owner=is_owner, invite_url=invite_url)
         await interaction.response.send_message(embed=embed_user(), view=view, ephemeral=True)
 
-    # -----------------------
     # /ping — latency check
-    # -----------------------
     @app_commands.command(name="ping", description="Check bot latency.")
     async def ping_cmd(self, interaction: discord.Interaction):
         await interaction.response.send_message(f"🏓 Pong! {round(self.bot.latency * 1000)}ms", ephemeral=True)
 
-    # -----------------------
     # /aitest — owner-only quick demo
-    # -----------------------
     @app_commands.command(name="aitest", description="Owner-only: quick translation demo.")
     async def aitest_cmd(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_ID:
@@ -221,7 +215,7 @@ class UserCommands(commands.Cog):
         try:
             resp = await interaction.client.loop.run_in_executor(
                 None,
-                lambda: client.chat.completions.create(
+                lambda: client.chat_completions.create(  # if using newer SDK, replace with client.chat.completions.create
                     model="gpt-4o-mini",
                     messages=[
                         {"role": "system",
@@ -232,7 +226,9 @@ class UserCommands(commands.Cog):
                     temperature=0.2,
                 )
             )
-            out = resp.choices[0].message.content.strip()
+            # Adjust accessor depending on SDK; for 1.3.7 use .chat.completions.create above and:
+            # out = resp.choices[0].message.content.strip()
+            out = getattr(resp.choices[0], "message", resp.choices[0]).content.strip()
 
             embed = discord.Embed(
                 title="🧪 Demo Result",
