@@ -1,4 +1,3 @@
-# cogs/user_commands.py
 import os
 import discord
 from discord.ext import commands
@@ -8,18 +7,29 @@ BOT_COLOR = 0xDE002A
 OWNER_ID = 762267166031609858  # Polarix1954
 
 def build_invite_url(app_id: int) -> str:
-    # Administrator is not required; these perms cover reading, reacting, embeds, DMs
-    perms = 274878188544  # Send Messages, Embed Links, Read Message History, Add Reactions, Use App Commands, etc.
+    perms = 274878188544
     return f"https://discord.com/oauth2/authorize?client_id={app_id}&permissions={perms}&scope=bot%20applications.commands"
+
+# Lazy OpenAI client helper (same pattern as translate.py)
+from openai import OpenAI
+_oai_client = None
+def get_oai_client():
+    global _oai_client
+    if _oai_client is None:
+        key = os.getenv("OPENAI_API_KEY")
+        if not key:
+            return None
+        try:
+            _oai_client = OpenAI(api_key=key)
+        except Exception:
+            _oai_client = None
+    return _oai_client
 
 
 class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # -----------------------
-    # /help — user-facing guide (ephemeral)
-    # -----------------------
     @app_commands.command(name="help", description="How to use Demon Translator.")
     async def help_cmd(self, interaction: discord.Interaction):
         app_id = self.bot.user.id if self.bot.user else 0
@@ -43,7 +53,7 @@ class UserCommands(commands.Cog):
                 "• `/setmylang` — pick your personal language (dropdown)\n"
                 "• `/translate <text>` — manual translation (AI quality)\n"
                 "• `/ping` — check if I'm alive\n"
-                "• Admins: `/aisettings`, `/settings`, `/channelselection`, `/defaultlang`\n"
+                "• Admins: `/aisettings`, `/settings`, `/channelselection`, `/defaultlang`, `/librestatus`\n"
             ),
             inline=False
         )
@@ -63,29 +73,21 @@ class UserCommands(commands.Cog):
 
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    # -----------------------
-    # /ping — latency check
-    # -----------------------
     @app_commands.command(name="ping", description="Check bot latency.")
     async def ping_cmd(self, interaction: discord.Interaction):
         await interaction.response.send_message(f"🏓 Pong! {round(self.bot.latency * 1000)}ms", ephemeral=True)
 
-    # -----------------------
-    # /aitest — owner-only quick AI demo
-    # -----------------------
     @app_commands.command(name="aitest", description="Owner-only: Run a quick AI translation demo.")
     async def aitest_cmd(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_ID:
             return await interaction.response.send_message("❌ Owner only.", ephemeral=True)
 
-        from openai import OpenAI
-        key = os.getenv("OPENAI_API_KEY")
-        if not key:
+        client = get_oai_client()
+        if not client:
             return await interaction.response.send_message("⚠️ No OPENAI_API_KEY set.", ephemeral=True)
 
         await interaction.response.defer(ephemeral=True)
 
-        client = OpenAI(api_key=key)
         sample = "Nah bro that’s cap, ain’t no way he pulled that W 💀🔥"
         target_lang = "de"
 
@@ -95,8 +97,9 @@ class UserCommands(commands.Cog):
                 lambda: client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": f"Translate the user's message to '{target_lang}'. "
-                                                      f"Preserve tone, slang and emojis. Return only the translation."},
+                        {"role": "system",
+                         "content": f"Translate the user's message to '{target_lang}'. "
+                                    f"Preserve tone, slang and emojis. Return only the translation."},
                         {"role": "user", "content": sample},
                     ],
                     temperature=0.2,
