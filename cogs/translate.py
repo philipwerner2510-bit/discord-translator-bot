@@ -1,198 +1,218 @@
+import os
+import re
+import asyncio
+from datetime import datetime
+import aiohttp
 import discord
 from discord.ext import commands
-import asyncio
-from googletrans import Translator
+
 from utils.cache import TranslationCache
 from utils import database
 from utils.logging_utils import log_error
-import os
-import time
-from datetime import datetime
 
+# ---------- CONFIG ----------
 BOT_COLOR = 0xde002a
-translator = Translator()
-cache = TranslationCache(ttl=600)
+LIBRE_URL = os.getenv("LIBRE_URL", "https://libretranslate.de/translate")  # public for now
+CACHE_TTL = 60 * 60 * 24  # 24h
+AI_COST_CAP_EUR = 10.0
+AI_WARN_AT_EUR = 8.0
+SUPPORTED_LANGS = ["en","de","es","fr","it","ja","ko","zh"]
 
-AI_COST_CAP = 10.0
-AI_APPROACH_LIMIT = 8.0
+# Aggressive slang/emoji detector (you chose “A”)
+SLANG_WORDS = {
+    "cap","no cap","bet","sus","lowkey","highkey","sigma","rizz","gyatt",
+    "gyat","sheesh","skibidi","fanum","ohio","mid","copium","ratio","cope",
+    "based","cringe","drip","npc","goat","fax","ate","smash","bussin","yeet",
+    "fire","lit","pog","poggers","kekw","xdd","bruh","lmao","lol","fr","ong",
+}
+EMOJI_REGEX = re.compile(
+    r"[\U0001F1E6-\U0001F1FF\U0001F300-\U0001F6FF\U0001F900-\U0001FAFF\U00002700-\U000027BF]"
+)
 
-import openai
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# OpenAI (sync client; we’ll call it via asyncio.to_thread)
+from openai import OpenAI
+_oai_key = os.getenv("OPENAI_API_KEY")
+_oai_client = OpenAI(api_key=_oai_key) if _oai_key else None
+
+# Shared cache
+cache = TranslationCache(ttl=CACHE_TTL)
 
 
-# GPT-4o Mini translate
-async def ai_translate(text, target_lang):
+# ---------- Heuristics ----------
+def needs_ai(text: str) -> bool:
+    t = text.lower()
+    if len(t) > 200:
+        return True
+    if EMOJI_REGEX.search(t):
+        return True
+    # if any slang word appears as a standalone token
+    for w in SLANG_WORDS:
+        if re.search(rf"\b{re.escape(w)}\b", t):
+            return True
+    return False
+
+
+# ---------- Engines ----------
+async def libre_translate(text: str, target_lang: str) -> str | None:
     try:
-        response = await openai.ChatCompletion.acreate(
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                LIBRE_URL,
+                json={"q": text, "source": "auto", "target": target_lang, "format": "text"},
+                headers={"Content-Type": "application/json"},
+                timeout=12,
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                return data.get("translatedText") or None
+    except Exception:
+        return None
+
+
+async def openai_translate(text: str, target_lang: str) -> tuple[str | None, int, float]:
+    """Return (translation, tokens, estimated_eur). Uses GPT-4o mini."""
+    if not _oai_client:
+        return None, 0, 0.0
+
+    def _call():
+        return _oai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": f"You translate text to {target_lang}. Only translate, never explain."},
-                {"role": "user", "content": text}
+                {"role": "system",
+                 "content": f"You are a high-quality translator. Translate the user's message to '{target_lang}'. "
+                            f"Preserve tone, slang and emojis. Return only the translation."},
+                {"role": "user", "content": text},
             ],
-            temperature=0.2
+            temperature=0.2,
         )
-        ai_text = response["choices"][0]["message"]["content"]
-        tokens = response["usage"]["total_tokens"]
-        cost = tokens * 0.000003
-        await database.add_ai_usage(tokens, cost)
-        return ai_text, tokens, cost
+
+    try:
+        resp = await asyncio.to_thread(_call)
+        out = resp.choices[0].message.content.strip()
+        tokens = (resp.usage.total_tokens if resp.usage and resp.usage.total_tokens else 0)
+        # simple rough EUR estimate: ~$0.0000006/token → €0.0000006 approx (kept tiny and safe)
+        est_eur = tokens * 0.0000006
+        await database.add_ai_usage(tokens, est_eur)
+        return out, tokens, est_eur
     except Exception:
         return None, 0, 0.0
 
 
-async def google_translate(text, target_lang):
-    try:
-        result = translator.translate(text, dest=target_lang)
-        return result.text
-    except Exception:
-        return None
-
-
+# ---------- Cog ----------
 class Translate(commands.Cog):
-
     def __init__(self, bot):
         self.bot = bot
-        self.reacted_messages = set()
+        self._inflight = set()  # (message_id, user_id)
 
-    # ------------------------------------
-    # Reaction trigger
-    # ------------------------------------
     @commands.Cog.listener()
-    async def on_reaction_add(self, reaction, user):
-        if user.bot:
-            return
-        message = reaction.message
+    async def on_message(self, message: discord.Message):
+        # Auto-react in configured channels with the bot's emote (if your other cog does this, you can skip)
+        # Kept minimal here—your Admin cog handles emote + channels.
+        pass
 
-        gid = getattr(message.guild, "id", None)
-        if not gid:
-            return
-
-        allowed = await database.get_translation_channels(gid)
-        if message.channel.id not in allowed:
+    @commands.Cog.listener()
+    async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
+        if user.bot or not reaction.message.guild:
             return
 
-        key = (message.id, user.id)
-        if key in self.reacted_messages:
+        guild = reaction.message.guild
+        allowed = await database.get_translation_channels(guild.id)
+        if not allowed or reaction.message.channel.id not in allowed:
             return
-        self.reacted_messages.add(key)
+
+        key = (reaction.message.id, user.id)
+        if key in self._inflight:
+            return
+        self._inflight.add(key)
 
         try:
-            await self.handle_reaction(reaction, user)
-        finally:
-            await asyncio.sleep(2)
-            self.reacted_messages.discard(key)
+            # personal target language or server default
+            target = await database.get_user_lang(user.id) or await database.get_server_lang(guild.id) or "en"
+            if target not in SUPPORTED_LANGS:
+                target = "en"
 
-    # ------------------------------------
-    async def handle_reaction(self, reaction, user):
-        language = await database.get_user_lang(user.id)
-        if not language:
-            await self.prompt_language_choice(reaction.message, user)
-            return
-
-        await self.translate_message(reaction.message, user, language)
-
-    # ------------------------------------
-    # Prompt user to set a language
-    # ------------------------------------
-    async def prompt_language_choice(self, msg, user):
-        try:
-            dropdown = discord.ui.Select(
-                placeholder="Choose your language 🌍",
-                options=[
-                    discord.SelectOption(label="English", value="en", emoji="🇬🇧"),
-                    discord.SelectOption(label="German", value="de", emoji="🇩🇪"),
-                    discord.SelectOption(label="Spanish", value="es", emoji="🇪🇸"),
-                    discord.SelectOption(label="French", value="fr", emoji="🇫🇷"),
-                    discord.SelectOption(label="Italian", value="it", emoji="🇮🇹"),
-                    discord.SelectOption(label="Japanese", value="ja", emoji="🇯🇵"),
-                    discord.SelectOption(label="Korean", value="ko", emoji="🇰🇷"),
-                    discord.SelectOption(label="Chinese", value="zh", emoji="🇨🇳"),
-                ]
-            )
-
-            view = discord.ui.View()
-            view.add_item(dropdown)
-
-            async def callback(interaction: discord.Interaction):
-                await database.set_user_lang(user.id, dropdown.values[0])
-                await interaction.response.send_message(
-                    f"✅ Your language has been set to `{dropdown.values[0]}`!",
-                    ephemeral=True
-                )
-                await self.translate_message(msg, user, dropdown.values[0])
-
-            dropdown.callback = callback
-
-            await user.send("🌍 Please select your translation language:", view=view)
-
+            await self._translate_and_send(reaction, user, target)
         except Exception as e:
-            gid = msg.guild.id if msg.guild else 0
-            await log_error(self.bot, gid, "Prompt send failed", e, admin_notify=True)
+            await log_error(self.bot, guild.id, "Reaction handler error", e, admin_notify=True)
+        finally:
+            # let Discord settle before allowing another translate on same key
+            await asyncio.sleep(1.0)
+            self._inflight.discard(key)
 
-    # ------------------------------------
-    async def translate_message(self, msg, user, target_lang):
-        try:
-            original = msg.content
-            if not original.strip():
+    async def _translate_and_send(self, reaction: discord.Reaction, user: discord.User, target_lang: str):
+        msg = reaction.message
+        original = msg.content or ""
+        if not original.strip():
+            return
+
+        # 1) Cache
+        cached = await cache.get(original, target_lang)
+        if cached:
+            translated = cached
+        else:
+            # 2) Decide engine
+            ai_enabled = await database.get_ai_enabled(msg.guild.id)
+            force_ai = needs_ai(original)
+
+            translated = None
+            used_ai = False
+
+            if ai_enabled and force_ai:
+                translated, _, _ = await openai_translate(original, target_lang)
+                used_ai = translated is not None
+
+            # 3) Libre first if not already translated by AI
+            if translated is None:
+                translated = await libre_translate(original, target_lang)
+
+            # 4) AI fallback if Libre failed and AI allowed
+            if translated is None and ai_enabled:
+                translated, _, _ = await openai_translate(original, target_lang)
+                used_ai = translated is not None
+
+            if translated is None:
+                # give up silently to avoid spam
                 return
 
-            cached = await cache.get(original, target_lang)
-            if cached:
-                translation = cached
-            else:
-                ai_enabled = await database.get_ai_enabled(msg.guild.id)
-                tokens, cost = 0, 0.0
-                translation = None
+            # Save to cache
+            await cache.set(original, target_lang, translated)
 
-                if ai_enabled:
-                    tokens_before, cost_before = await database.get_current_ai_usage()
-                    translation, tokens, cost = await ai_translate(original, target_lang)
-                    tokens_after, cost_after = await database.get_current_ai_usage()
+            # Warn/admin notify if cost approaching cap
+            if used_ai:
+                _, eur = await database.get_current_ai_usage()
+                if eur >= AI_COST_CAP_EUR:
+                    await database.set_ai_enabled(msg.guild.id, False)
+                    ch_id = await database.get_error_channel(msg.guild.id)
+                    if ch_id and (ch := msg.guild.get_channel(ch_id)):
+                        await ch.send("🔴 AI translation disabled — monthly cap reached. Falling back to Libre only.")
+                elif eur >= AI_WARN_AT_EUR:
+                    ch_id = await database.get_error_channel(msg.guild.id)
+                    if ch_id and (ch := msg.guild.get_channel(ch_id)):
+                        await ch.send(f"⚠️ AI usage is at **€{eur:.2f}/€{AI_COST_CAP_EUR:.2f}**. "
+                                      f"Bot will switch to Libre-only soon.")
 
-                    current_cost = cost_after
-                    if current_cost >= AI_COST_CAP:
-                        ai_enabled = False
-                        await database.set_ai_enabled(msg.guild.id, False)
+        # Build a clean embed reply
+        embed = discord.Embed(description=translated, color=BOT_COLOR)
+        embed.set_author(name=msg.author.display_name, icon_url=msg.author.display_avatar.url)
+        ts = msg.created_at.strftime("%H:%M UTC")
+        embed.set_footer(text=f"{ts} • → {target_lang}")
+        embed.description += f"\n[View original]({msg.jump_url})"
 
-                    elif current_cost >= AI_APPROACH_LIMIT:
-                        channel = await database.get_error_channel(msg.guild.id)
-                        if channel:
-                            ch = msg.guild.get_channel(channel)
-                            if ch:
-                                await ch.send(
-                                    f"⚠️ AI usage at **€{current_cost:.2f}/€10**.\n"
-                                    f"Bot will fallback to Google soon!"
-                                )
+        # Try DM first (your original UX), else reply in channel silently
+        try:
+            await user.send(embed=embed)
+        except Exception:
+            await msg.reply(embed=embed, mention_author=False)
 
-                if not translation:
-                    translation = await google_translate(original, target_lang)
+        # Try remove the user's reaction to show it was handled
+        try:
+            await reaction.remove(user)
+        except Exception:
+            pass
 
-                if not translation:
-                    return
-
-                await cache.set(original, target_lang, translation)
-
-            try:
-                await msg.remove_reaction(reaction=self.get_reaction(msg), member=self.bot.user)
-            except:
-                pass
-
-            await msg.reply(
-                f"🌍 **Translated to `{target_lang}`:**\n> {translation}",
-                mention_author=False
-            )
-
-            self.bot.total_translations += 1
-
-        except Exception as e:
-            gid = msg.guild.id
-            await log_error(self.bot, gid, "Reaction handler error", e, admin_notify=True)
-
-    def get_reaction(self, msg):
-        for e in msg.reactions:
-            if e.me:
-                return e
-        return None
+        # Count
+        self.bot.total_translations = getattr(self.bot, "total_translations", 0) + 1
 
 
 async def setup(bot):
