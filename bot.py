@@ -33,7 +33,8 @@ async def setup_hook():
         "cogs.translate",
         "cogs.events",
         "cogs.ops_commands",
-        "cogs.analytics_commands",
+        "cogs.analytics_commands", 
+        "cogs.welcome.py",
     ]
     for ext in extensions:
         try:
