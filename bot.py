@@ -1,137 +1,126 @@
-# bot.py
 import os
 import asyncio
+from datetime import datetime, timedelta
+
 import discord
 from discord.ext import commands
-from datetime import datetime, timedelta
-from utils import database
 
+# -----------------------------
+# Intents
+# -----------------------------
+intents = discord.Intents.default()
+intents.guilds = True
+intents.messages = True
+intents.reactions = True
+intents.message_content = True
+intents.dm_messages = True
+
+# -----------------------------
+# Bot
+# -----------------------------
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# -----------------------------
+# Runtime counters (reset on restart)
+# -----------------------------
+bot.total_translations = 0
+bot.cached_translations = 0
+bot.cache_hits = 0
+bot.cache_misses = 0
+bot.ai_translations = 0
+bot.libre_translations = 0
+
+# color & presence refresh
 BOT_COLOR = 0xDE002A
 PRESENCE_INTERVAL = 300  # seconds
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.messages = True
-intents.reactions = True
-intents.guilds = True
-intents.dm_messages = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-bot.start_time = datetime.utcnow()
-bot.total_translations = 0
+# Optional: set this to a test guild ID for faster per-guild sync in dev
+DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")  # e.g. "1425585153585189067"
 
 
 # -----------------------------
-# Setup hook: init DB + load cogs
+# Cog loader & runner
 # -----------------------------
-async def setup_hook():
-    await database.init_db()
-
-    extensions = [
+async def run():
+    cogs = [
         "cogs.user_commands",
         "cogs.admin_commands",
         "cogs.translate",
         "cogs.events",
         "cogs.ops_commands",
-        "cogs.analytics_commands", 
-        "cogs.welcome",
+        "cogs.analytics_commands",  # keep if you have it
+        "cogs.welcome",             # keep if you added /guide auto-welcome
     ]
-    for ext in extensions:
+    for ext in cogs:
         try:
             await bot.load_extension(ext)
             print(f"✅ Loaded {ext}")
         except Exception as e:
             print(f"❌ Failed to load {ext}: {e}")
 
-# IMPORTANT: register the hook so discord.py actually calls it
-bot.setup_hook = setup_hook
+    token = os.environ.get("BOT_TOKEN")
+    if not token:
+        raise RuntimeError("BOT_TOKEN env var is missing.")
+    await bot.start(token)
 
 
 # -----------------------------
-# Ready: per-guild + global sync
+# Slash sync + background loops
 # -----------------------------
 @bot.event
 async def on_ready():
+    bot.start_time = getattr(bot, "start_time", datetime.utcnow())
+
+    # Per-guild sync (dev) then global sync
+    try:
+        if DEV_GUILD_ID:
+            gid = int(DEV_GUILD_ID)
+            guild = discord.Object(id=gid)
+            synced = await bot.tree.sync(guild=guild)
+            print(f"🔧 Synced commands to guild {gid} ({len(synced)} cmds)")
+        synced_global = await bot.tree.sync()
+        print(f"🌍 Global slash commands synced ({len(synced_global)} cmds)")
+    except Exception as e:
+        print(f"⚠️ Command sync failed: {e}")
+
     print(f"✅ Logged in as {bot.user} ({bot.user.id})")
 
-    # Fast per-guild sync so commands show instantly
-    synced = 0
-    for guild in bot.guilds:
-        try:
-            await bot.tree.sync(guild=guild)
-            print(f"🔧 Synced commands to guild {guild.name} ({guild.id})")
-            synced += 1
-        except Exception as e:
-            print(f"❌ Sync failed in guild {guild.id}: {e}")
-    print(f"✅ Per-guild sync completed for {synced} guilds")
+    # Presence loop
+    if not getattr(bot, "_presence_task", None):
+        bot._presence_task = asyncio.create_task(presence_loop())
 
-    # Also do a global sync (helps future guilds)
-    try:
-        await bot.tree.sync()
-        print("🌍 Global slash commands synced")
-    except Exception as e:
-        print(f"⚠️ Global sync error: {e}")
+    # Daily counter reset (translations today)
+    if not getattr(bot, "_daily_reset_task", None):
+        bot._daily_reset_task = asyncio.create_task(daily_reset())
 
-    # background tasks
-    asyncio.create_task(update_presence())
-    asyncio.create_task(reset_daily_translations())
     print("Instance is healthy ✅")
 
 
-# -----------------------------
-# Sync when joining a new guild
-# -----------------------------
-@bot.event
-async def on_guild_join(guild: discord.Guild):
-    try:
-        await bot.tree.sync(guild=guild)
-        print(f"🆕 Synced commands to NEW guild {guild.name} ({guild.id})")
-    except Exception as e:
-        print(f"❌ Failed syncing new guild {guild.id}: {e}")
-
-    # Try coloring the bot's top role (if not managed)
-    try:
-        role = guild.me.top_role
-        if role and not role.managed:
-            await role.edit(color=discord.Color(BOT_COLOR))
-    except Exception:
-        pass
-
-
-# -----------------------------
-# Presence updater
-# -----------------------------
-async def update_presence():
+async def presence_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
-            activity = discord.Game(
-                name=f"{len(bot.guilds)} servers | {bot.total_translations} translated"
-            )
+            guild_count = len(bot.guilds)
+            total_trans = getattr(bot, "total_translations", 0)
+            activity = discord.Game(name=f"{guild_count} servers • {total_trans} translations today")
             await bot.change_presence(activity=activity)
         except Exception as e:
             print(f"⚠️ Presence update failed: {e}")
         await asyncio.sleep(PRESENCE_INTERVAL)
 
 
-# -----------------------------
-# Reset daily translation counter at 00:00 UTC
-# -----------------------------
-async def reset_daily_translations():
+async def daily_reset():
     await bot.wait_until_ready()
     while not bot.is_closed():
         now = datetime.utcnow()
         next_reset = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        await asyncio.sleep(max(1.0, (next_reset - now).total_seconds()))
+        await asyncio.sleep((next_reset - now).total_seconds())
         bot.total_translations = 0
-        print("🔄 Daily translation counter reset")
+        print("🔄 Daily translations counter reset")
 
 
 # -----------------------------
-# Entrypoint
+# Entry
 # -----------------------------
 if __name__ == "__main__":
-    token = os.getenv("BOT_TOKEN")
-    if not token:
-        raise RuntimeError("Missing BOT_TOKEN environment variable.")
-    bot.run(token)
+    asyncio.run(run())
