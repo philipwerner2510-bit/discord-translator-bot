@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from utils import database
 
 BOT_COLOR = 0xDE002A
-PRESENCE_INTERVAL = 300  # 5 min
+PRESENCE_INTERVAL = 300
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -15,7 +15,10 @@ intents.reactions = True
 intents.guilds = True
 intents.dm_messages = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents
+)
 bot.start_time = datetime.utcnow()
 bot.total_translations = 0
 
@@ -35,25 +38,23 @@ async def setup_hook():
             print(f"✅ Loaded {ext}")
         except Exception as e:
             print(f"❌ Failed to load {ext}: {e}")
-    await bot.tree.sync()
-    print("✅ Slash commands synced")
 
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} ({bot.user.id})")
+    await bot.tree.sync()
+    print("✅ Slash commands synced")
     asyncio.create_task(update_presence())
     asyncio.create_task(reset_daily_translations())
     print("Instance is healthy")
 
 async def update_presence():
     await bot.wait_until_ready()
-    while not bot.is_closed():
+    while True:
         try:
-            guild_count = len(bot.guilds)
-            trans = getattr(bot, "total_translations", 0)
             activity = discord.Activity(
                 type=discord.ActivityType.watching,
-                name=f"{guild_count} servers | {trans} translated"
+                name=f"{len(bot.guilds)} servers | {bot.total_translations} translated"
             )
             await bot.change_presence(activity=activity)
         except Exception as e:
@@ -62,7 +63,7 @@ async def update_presence():
 
 async def reset_daily_translations():
     await bot.wait_until_ready()
-    while not bot.is_closed():
+    while True:
         now = datetime.utcnow()
         next_ = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         await asyncio.sleep((next_ - now).total_seconds())
@@ -70,5 +71,4 @@ async def reset_daily_translations():
         print("🔄 Daily counter reset")
 
 if __name__ == "__main__":
-    asyncio.run(setup_hook())
     bot.run(os.environ["BOT_TOKEN"])
