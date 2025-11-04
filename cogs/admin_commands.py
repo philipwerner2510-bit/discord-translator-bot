@@ -1,4 +1,3 @@
-# cogs/admin_commands.py
 import os
 import aiohttp
 import discord
@@ -15,24 +14,34 @@ def is_admin():
     return app_commands.check(predicate)
 
 def libre_endpoint() -> str:
-    # Full translate endpoint (may be overridden by env)
     return os.getenv("LIBRE_URL", "https://libretranslate.de/translate")
 
 def libre_base() -> str:
-    # Derive base from /translate endpoint
     url = libre_endpoint().rstrip("/")
     if url.endswith("/translate"):
         return url[: -len("/translate")]
     return url
+
+# Lazy OpenAI client helper
+from openai import OpenAI
+_oai_client = None
+def get_oai_client():
+    global _oai_client
+    if _oai_client is None:
+        key = os.getenv("OPENAI_API_KEY")
+        if not key:
+            return None
+        try:
+            _oai_client = OpenAI(api_key=key)
+        except Exception:
+            _oai_client = None
+    return _oai_client
 
 
 class AdminCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # -----------------------
-    # /defaultlang — set server default language
-    # -----------------------
     @is_admin()
     @app_commands.command(name="defaultlang", description="Set the default translation language for this server.")
     async def defaultlang(self, interaction: discord.Interaction, lang: str):
@@ -46,9 +55,6 @@ class AdminCommands(commands.Cog):
         await database.set_server_lang(interaction.guild.id, lang)
         await interaction.followup.send(f"✅ Default server language set to `{lang}`.", ephemeral=True)
 
-    # -----------------------
-    # /channelselection — select channels where reaction-to-translate is active
-    # -----------------------
     @is_admin()
     @app_commands.command(name="channelselection", description="Choose channels where translations are active.")
     async def channelselection(self, interaction: discord.Interaction):
@@ -85,27 +91,18 @@ class AdminCommands(commands.Cog):
             ephemeral=True
         )
 
-    # -----------------------
-    # /seterrorchannel — set a channel to receive warnings (AI cap, errors, etc.)
-    # -----------------------
     @is_admin()
     @app_commands.command(name="seterrorchannel", description="Set a channel where AI warnings & errors appear.")
     async def seterrorchannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         await database.set_error_channel(interaction.guild.id, channel.id)
         await interaction.response.send_message(f"✅ Error channel set to {channel.mention}", ephemeral=True)
 
-    # -----------------------
-    # /emote — set the reaction emote the bot will listen for
-    # -----------------------
     @is_admin()
     @app_commands.command(name="emote", description="Set the bot's reaction emote for translation triggers.")
     async def emote(self, interaction: discord.Interaction, emote: str):
         await database.set_bot_emote(interaction.guild.id, emote.strip())
         await interaction.response.send_message(f"✅ Reaction emote set to {emote}", ephemeral=True)
 
-    # -----------------------
-    # /aisettings — enable/disable AI usage in this server
-    # -----------------------
     @is_admin()
     @app_commands.command(name="aisettings", description="Enable or disable AI translations for this server.")
     async def aisettings(self, interaction: discord.Interaction, enabled: bool):
@@ -114,9 +111,6 @@ class AdminCommands(commands.Cog):
         status = "🧠 AI Enabled ✅" if enabled else "⚙️ AI Disabled — Libre-only"
         await interaction.followup.send(status, ephemeral=True)
 
-    # -----------------------
-    # /settings — show server settings (+ Test AI + Ping Libre buttons)
-    # -----------------------
     @is_admin()
     @app_commands.command(name="settings", description="View translation settings for this server.")
     async def settings(self, interaction: discord.Interaction):
@@ -140,19 +134,15 @@ class AdminCommands(commands.Cog):
         embed.add_field(name="Default Language", value=str(default_lang), inline=True)
         embed.add_field(name="AI Mode", value=ai_status, inline=True)
         embed.add_field(name="Reaction Emote", value=emote, inline=True)
-
         embed.add_field(name="Error Channel", value=err_ch, inline=True)
         embed.add_field(name="Translation Channels", value=ch_list, inline=False)
-
         embed.add_field(name="Libre Endpoint", value=f"`{libre_url}`", inline=False)
         embed.add_field(name="Cache", value=cache_info, inline=True)
 
-        # ---------- Buttons ----------
+        # Buttons: Test AI + Ping Libre
         view = discord.ui.View(timeout=120)
 
-        # 🧪 Test AI Now
         test_btn = discord.ui.Button(label="🧪 Test AI Now", style=discord.ButtonStyle.primary)
-
         async def test_cb(btn_inter: discord.Interaction):
             if not btn_inter.user.guild_permissions.administrator:
                 return await btn_inter.response.send_message("❌ Admins only.", ephemeral=True)
@@ -161,16 +151,15 @@ class AdminCommands(commands.Cog):
                     "⚙️ AI is **disabled**. Enable it with `/aisettings true`.",
                     ephemeral=True
                 )
-            key = os.getenv("OPENAI_API_KEY")
-            if not key:
+
+            client = get_oai_client()
+            if not client:
                 return await btn_inter.response.send_message(
                     "⚠️ No `OPENAI_API_KEY` set. Cannot run AI test.",
                     ephemeral=True
                 )
 
             try:
-                from openai import OpenAI
-                client = OpenAI(api_key=key)
                 target = default_lang if default_lang in SUPPORTED_LANGS else "en"
                 sample = "This is a quick AI self-check. If you see this translated, AI is working."
                 resp = await btn_inter.client.loop.run_in_executor(
@@ -179,8 +168,7 @@ class AdminCommands(commands.Cog):
                         model="gpt-4o-mini",
                         messages=[
                             {"role": "system",
-                             "content": f"Translate the user's message to '{target}'. "
-                                        f"Return only the translation."},
+                             "content": f"Translate the user's message to '{target}'. Return only the translation."},
                             {"role": "user", "content": sample},
                         ],
                         temperature=0.2,
@@ -197,9 +185,7 @@ class AdminCommands(commands.Cog):
         test_btn.callback = test_cb
         view.add_item(test_btn)
 
-        # 🔌 Ping Libre
         ping_btn = discord.ui.Button(label="🔌 Ping Libre", style=discord.ButtonStyle.secondary)
-
         async def ping_cb(btn_inter: discord.Interaction):
             if not btn_inter.user.guild_permissions.administrator:
                 return await btn_inter.response.send_message("❌ Admins only.", ephemeral=True)
@@ -215,7 +201,6 @@ class AdminCommands(commands.Cog):
                                 ephemeral=True
                             )
                         data = await r.json()
-                        # Expecting list of {"code":"en","name":"English"} ...
                         langs = [f"`{x.get('code','?')}` {x.get('name','?')}" for x in data][:24]
                         body = "\n".join(langs) if langs else "No languages reported."
                         await btn_inter.response.send_message(
@@ -233,9 +218,6 @@ class AdminCommands(commands.Cog):
 
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
-    # -----------------------
-    # /librestatus — optional quick status check (admin-only)
-    # -----------------------
     @is_admin()
     @app_commands.command(name="librestatus", description="Ping the configured Libre endpoint and list languages.")
     async def librestatus(self, interaction: discord.Interaction):
