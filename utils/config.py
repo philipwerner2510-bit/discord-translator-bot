@@ -1,4 +1,4 @@
-# utils/config.py  (NEW)
+# utils/config.py
 from __future__ import annotations
 import json, os
 from dataclasses import dataclass, field
@@ -36,3 +36,9 @@ def load_config() -> AppConfig:
 
 CONFIG = load_config()
 SUPPORTED_LANGS = CONFIG.supported_langs
+
+def reload_config():
+    global CONFIG, SUPPORTED_LANGS
+    CONFIG = load_config()
+    SUPPORTED_LANGS = CONFIG.supported_langs
+    return CONFIG
