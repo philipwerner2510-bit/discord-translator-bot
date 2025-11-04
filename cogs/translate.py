@@ -141,7 +141,7 @@ async def openai_translate(text: str, target_lang: str) -> tuple[str | None, int
     except Exception as e:
         return None, 0, 0.0, f"exception:{type(e).__name__}"
 
-# ---------- Slash: /translate with autocomplete ----------
+# ---------- Autocomplete provider (must be async!) ----------
 def _filter_lang_choices(current: str):
     q = (current or "").strip().lower()
     items = []
@@ -152,17 +152,19 @@ def _filter_lang_choices(current: str):
             items.append(app_commands.Choice(name=label[:100], value=code))
         if len(items) >= 25:
             break
-    # If nothing matched, still show the first page
-    return items or [app_commands.Choice(name=f"{flag} {name} ({code})"[:100], value=code)
-                     for code, flag, name in LANG_CATALOG[:25]]
+    return items or [app_commands.Choice(name=f"{LANG_CATALOG[i][1]} {LANG_CATALOG[i][2]} ({LANG_CATALOG[i][0]})"[:100],
+                                         value=LANG_CATALOG[i][0]) for i in range(min(25, len(LANG_CATALOG)))]
+
+async def autocomplete_target_lang(interaction: discord.Interaction, current: str):
+    return _filter_lang_choices(current)
 
 class Translate(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._inflight = set()
 
-    # --- Autocomplete provider for target_lang
-    @app_commands.autocomplete(target_lang=lambda i, c: _filter_lang_choices(c.value))
+    # --- Slash: /translate with async autocomplete ---
+    @app_commands.autocomplete(target_lang=autocomplete_target_lang)
     @app_commands.command(name="translate", description="Translate text to a chosen language (with autocomplete).")
     @app_commands.describe(text="What should I translate?", target_lang="Pick a language (type to search)")
     async def translate_cmd(self, interaction: discord.Interaction, text: str, target_lang: str):
