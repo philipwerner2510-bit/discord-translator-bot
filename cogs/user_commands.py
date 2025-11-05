@@ -1,12 +1,11 @@
-# cogs/user_commands.py
 import os
 import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import database
+from utils.brand import COLOR, EMOJI_PRIMARY, EMOJI_HIGHLIGHT, EMOJI_ACCENT, footer
 
 OWNER_ID = int(os.getenv("OWNER_ID", "762267166031609858"))
-BRAND_COLOR = 0x00E6F6  # Zephyra cyan
 
 SUPPORTED_LANGS = [
     "en","zh","hi","es","fr","ar","bn","pt","ru","ja",
@@ -14,10 +13,6 @@ SUPPORTED_LANGS = [
     "gu","kn","ml","pa","or","fa","sw","am","ha","yo"
 ]
 
-def is_owner(user: discord.abc.User) -> bool:
-    return user.id == OWNER_ID
-
-# async autocomplete for langs
 async def ac_lang(interaction: discord.Interaction, current: str):
     current = (current or "").lower()
     items = [code for code in SUPPORTED_LANGS if current in code]
@@ -25,81 +20,56 @@ async def ac_lang(interaction: discord.Interaction, current: str):
 
 def embed_general() -> discord.Embed:
     e = discord.Embed(
-        title="Zephyra — Help (General)",
-        color=BRAND_COLOR,
-        description=(
-            "Commands available to everyone.\n"
-            "_Tip: Use Tab/Autocomplete on language fields._"
-        )
+        title=f"{EMOJI_PRIMARY} Zephyra — Help (General)",
+        color=COLOR,
+        description="Commands available to everyone.\n_Tip: language fields support autocomplete._"
     )
     e.add_field(
         name="`/translate <text> <target_lang>`",
-        value=(
-            "Translate **text** to a chosen **language code** (e.g. `en`, `de`, `fr`).\n"
-            "• Uses **AI translation only**.\n"
-            "• Returns a clean translated message."
-        ),
+        value="Translate text to a chosen language code (e.g., `en`, `de`, `fr`).",
         inline=False,
     )
     e.add_field(
         name="`/setmylang <lang>`",
-        value=(
-            "Set your **personal default language** for DM translations triggered by reaction.\n"
-            "• Supports **autocomplete** for codes."
-        ),
+        value="Set your personal default language for DM translations (autocomplete).",
         inline=False,
     )
-    e.add_field(name="`/ping`", value="Quick latency check.", inline=False)
-    e.add_field(name="`/guide`", value="Show the quick-start guide for all users.", inline=False)
-    e.add_field(name="`/invite`", value="DMs you an invite link to add Zephyra to another server.", inline=False)
-    e.set_footer(text="Created by @Polarix1954")
+    e.add_field(name="`/ping`", value="Latency check.", inline=False)
+    e.add_field(name="`/guide`", value="Quick-start guide (admin posts it publicly).", inline=False)
+    e.add_field(name="`/invite`", value="DMs you the invite link to add Zephyra.", inline=False)
+    e.set_footer(text=footer())
     return e
 
 def embed_admin() -> discord.Embed:
     e = discord.Embed(
-        title="Zephyra — Help (Admin)",
-        color=BRAND_COLOR,
+        title=f"{EMOJI_HIGHLIGHT} Zephyra — Help (Admin)",
+        color=COLOR,
         description="Admin-only configuration commands."
     )
-    e.add_field(
-        name="`/defaultlang <lang>`",
-        value="Set the **server default language** (fallback if a user didn't set a personal one). Autocomplete supported.",
-        inline=False,
-    )
-    e.add_field(
-        name="`/channelselection`",
-        value=(
-            "Select **which channels** Zephyra should watch and react in.\n"
-            "Users can click the reaction to receive a **DM translation**."
-        ),
-        inline=False,
-    )
+    e.add_field(name="`/defaultlang <lang>`", value="Set server default language (autocomplete).", inline=False)
+    e.add_field(name="`/channelselection`", value="Choose channels Zephyra should watch/react in.", inline=False)
     e.add_field(
         name="`/emote <emoji>`",
-        value=(
-            "Set the **reaction emote** Zephyra uses in watched channels.\n"
-            "• Accepts **Unicode** (e.g. `👍`) or a **custom emoji from THIS server** (`<:name:id>`).\n"
-            "• Validates the emoji belongs to this server."
-        ),
+        value="Set reaction emote (Unicode or this server’s custom emoji `<:name:id>`).",
         inline=False,
     )
-    e.add_field(name="`/seterrorchannel <#channel | none>`", value="Set an **error log channel** or clear with `none`.", inline=False)
-    e.add_field(name="`/settings`", value="Show current server settings.", inline=False)
-    e.set_footer(text="Created by @Polarix1954")
+    e.add_field(name="`/seterrorchannel <#channel | none>`", value="Set/clear error log channel.", inline=False)
+    e.add_field(name="`/settings`", value="Show server settings.", inline=False)
+    e.set_footer(text=footer())
     return e
 
 def embed_owner() -> discord.Embed:
     e = discord.Embed(
-        title="Zephyra — Help (Owner)",
-        color=BRAND_COLOR,
-        description="Owner-only controls."
+        title=f"{EMOJI_ACCENT} Zephyra — Help (Owner)",
+        color=COLOR,
+        description="Owner-only utilities."
     )
     e.add_field(
         name="`/stats`",
-        value="Show servers, uptime, **monthly AI tokens** (in/out) & **estimated EUR**, and translation totals (today / lifetime).",
+        value="Servers, uptime, **monthly AI tokens** (in/out), estimated EUR, and translation totals.",
         inline=False,
     )
-    e.set_footer(text="Created by @Polarix1954 • Owner only")
+    e.set_footer(text=footer())
     return e
 
 class HelpView(discord.ui.View):
@@ -154,9 +124,10 @@ class UserCommands(commands.Cog):
     async def ping(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         latency_ms = round(self.bot.latency * 1000)
-        await interaction.followup.send(f"🏓 Pong! `{latency_ms} ms`", ephemeral=True)
+        e = discord.Embed(description=f"🏓 Pong! `{latency_ms} ms`", color=COLOR)
+        e.set_footer(text=footer())
+        await interaction.followup.send(embed=e, ephemeral=True)
 
-    # NEW: /setmylang with autocomplete and validation
     @app_commands.command(name="setmylang", description="Set your personal default translation language.")
     @app_commands.describe(lang="Language code (e.g., en, de, fr)")
     @app_commands.autocomplete(lang=ac_lang)
@@ -164,12 +135,13 @@ class UserCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         lang = (lang or "").lower().strip()
         if lang not in SUPPORTED_LANGS:
-            return await interaction.followup.send(
-                f"❌ Unsupported language code `{lang}`. Try one of: {', '.join(SUPPORTED_LANGS)}",
-                ephemeral=True
-            )
+            e = discord.Embed(description=f"❌ Unsupported language code `{lang}`.", color=COLOR)
+            e.set_footer(text=footer())
+            return await interaction.followup.send(embed=e, ephemeral=True)
         await database.set_user_lang(interaction.user.id, lang)
-        await interaction.followup.send(f"✅ Your personal language has been set to `{lang}`.", ephemeral=True)
+        e = discord.Embed(description=f"✅ Your personal language has been set to `{lang}`.", color=COLOR)
+        e.set_footer(text=footer())
+        await interaction.followup.send(embed=e, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
