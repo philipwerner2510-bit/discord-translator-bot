@@ -1,4 +1,3 @@
-# cogs/translate.py
 import re
 import asyncio
 import json
@@ -9,6 +8,7 @@ from discord.ext import commands
 from discord import app_commands
 from openai import OpenAI
 from utils import database
+from utils.brand import COLOR, EMOJI_THINKING, EMOJI_PRIMARY, footer
 
 AI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -19,7 +19,7 @@ SUPPORTED_LANGS = [
     "gu","kn","ml","pa","or","fa","sw","am","ha","yo"
 ]
 
-CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")  # <:name:id> or <a:name:id>
+CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
 
 def normalize_emote_input(s: str) -> str:
     return (s or "").strip()
@@ -32,10 +32,9 @@ def same_reaction(a: str, b: str) -> bool:
         return True
     ma, mb = CUSTOM_EMOJI_RE.match(a or ""), CUSTOM_EMOJI_RE.match(b or "")
     if ma and mb:
-        return ma.group(3) == mb.group(3)  # compare custom emoji IDs
+        return ma.group(3) == mb.group(3)
     return False
 
-# --- async autocomplete for languages
 async def ac_lang(interaction: discord.Interaction, current: str):
     current = (current or "").lower()
     items = [code for code in SUPPORTED_LANGS if current in code]
@@ -47,34 +46,43 @@ class Translate(commands.Cog):
         if not OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY env var not set.")
         self.ai = OpenAI(api_key=OPENAI_API_KEY)
-        self.sent = set()  # (message_id, user_id)
+        self.sent = set()
 
-    # /translate (manual)
     @app_commands.guild_only()
     @app_commands.describe(text="Text to translate", target_lang="Target language code (e.g., en, de, fr)")
     @app_commands.autocomplete(target_lang=ac_lang)
     @app_commands.command(name="translate", description="Translate a specific text with AI.")
     async def translate(self, interaction: discord.Interaction, text: str, target_lang: str):
         await interaction.response.defer(ephemeral=True)
-        target_lang = target_lang.lower()
+
+        target_lang = (target_lang or "").lower()
         if target_lang not in SUPPORTED_LANGS:
-            await interaction.followup.send(f"❌ Unsupported language code `{target_lang}`.", ephemeral=True)
-            return
+            return await interaction.followup.send(f"❌ Unsupported language code `{target_lang}`.", ephemeral=True)
+
+        thinking = discord.Embed(description=f"{EMOJI_THINKING} Translating…", color=COLOR)
+        thinking.set_footer(text=footer())
+        await interaction.followup.send(embed=thinking, ephemeral=True)
+
         try:
             translated, detected, usage = await self.ai_translate(text, target_lang)
             await database.add_translation_stat(
                 interaction.guild_id, interaction.user.id, used_ai=True,
                 tokens_in=usage.get("input",0), tokens_out=usage.get("output",0)
             )
-            embed = discord.Embed(description=translated, color=0x00E6F6)
+            embed = discord.Embed(description=translated, color=COLOR)
             embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-            timestamp = datetime.utcnow().strftime("%H:%M UTC")
-            embed.set_footer(text=f"Translated at {timestamp} • to {target_lang} • detected {detected}")
-            await interaction.followup.send(embed=embed, ephemeral=False)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Translation failed: {e}", ephemeral=True)
+            ts = datetime.utcnow().strftime("%H:%M UTC")
+            embed.set_footer(text=f"{EMOJI_PRIMARY} {ts} • to {target_lang} • from {detected} • {footer()}")
+            await interaction.channel.send(embed=embed)
 
-    # auto-react in selected channels
+            done = discord.Embed(description="✅ Sent translation.", color=COLOR)
+            done.set_footer(text=footer())
+            await interaction.followup.send(embed=done, ephemeral=True)
+        except Exception as e:
+            err = discord.Embed(description=f"❌ Translation failed: `{e}`", color=COLOR)
+            err.set_footer(text=footer())
+            await interaction.followup.send(embed=err, ephemeral=True)
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -98,7 +106,6 @@ class Translate(commands.Cog):
             else:
                 print(f"[{gid}] Could not add unicode emote {bot_emote} in #{message.channel.id}")
 
-    # react-to-translate (DM)
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
         if user.bot or not reaction.message.guild:
@@ -126,6 +133,10 @@ class Translate(commands.Cog):
             user_lang = "en"
 
         try:
+            thinking = discord.Embed(description=f"{EMOJI_THINKING} Translating…", color=COLOR)
+            thinking.set_footer(text=footer())
+            dm_msg = await user.send(embed=thinking)
+
             src_text = msg.content or ""
             translated, detected, usage = await self.ai_translate(src_text, user_lang)
             await database.add_translation_stat(
@@ -133,12 +144,14 @@ class Translate(commands.Cog):
                 tokens_in=usage.get("input",0), tokens_out=usage.get("output",0)
             )
 
-            embed = discord.Embed(description=translated, color=0x00E6F6)
+            embed = discord.Embed(description=translated, color=COLOR)
             embed.set_author(name=msg.author.display_name, icon_url=msg.author.display_avatar.url)
             ts = msg.created_at.strftime("%H:%M UTC")
-            embed.set_footer(text=f"{ts} • to {user_lang} • detected {detected}")
+            embed.set_footer(text=f"{EMOJI_PRIMARY} {ts} • to {user_lang} • from {detected} • {footer()}")
             embed.description += f"\n[Original message](https://discord.com/channels/{msg.guild.id}/{msg.channel.id}/{msg.id})"
-            await user.send(embed=embed)
+
+            await dm_msg.edit(embed=embed)
+
             try:
                 await reaction.remove(user)
             except Exception:
@@ -150,13 +163,11 @@ class Translate(commands.Cog):
         await asyncio.sleep(delay)
         self.sent.discard(key)
 
-    # AI translate helper — returns (translated_text, detected_lang_code, usage_dict)
     async def ai_translate(self, text: str, target_lang: str):
         system = (
             "You are a precise translator. "
             "Detect the source language (ISO 639-1 code) and translate the user's text to the requested target language."
         )
-        # Ask for strict JSON so we can parse detected language.
         user = (
             "Return ONLY strict JSON with keys: translated, detected.\n"
             "• detected must be the ISO 639-1 code of the source language (e.g., 'en','de','es').\n"
@@ -183,20 +194,14 @@ class Translate(commands.Cog):
         except Exception:
             pass
 
-        # Robust JSON extraction (in case the model wraps it)
         parsed = None
         try:
-            # try direct
             parsed = json.loads(raw)
         except Exception:
-            # try to extract first {...} block
-            start = raw.find("{")
-            end = raw.rfind("}")
+            start = raw.find("{"); end = raw.rfind("}")
             if start != -1 and end != -1 and end > start:
-                try:
-                    parsed = json.loads(raw[start:end+1])
-                except Exception:
-                    parsed = None
+                try: parsed = json.loads(raw[start:end+1])
+                except Exception: parsed = None
 
         if isinstance(parsed, dict):
             translated = str(parsed.get("translated", "")).strip()
@@ -205,7 +210,6 @@ class Translate(commands.Cog):
                 detected = "unknown"
             return translated, detected, usage
 
-        # Fallback: if parsing failed, return raw text and unknown
         return raw, "unknown", usage
 
 async def setup(bot):
