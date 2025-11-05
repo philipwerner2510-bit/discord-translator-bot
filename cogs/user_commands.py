@@ -3,7 +3,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from utils.brand import NAME, COLOR, HELP_TITLE, FOOTER
-from cogs.translate import _filter_lang_choices, SUPPORTED_LANGS, LANG_LOOKUP
+from cogs.translate import SUPPORTED_LANGS, LANG_LOOKUP, _filter_lang_choices
 
 def embed_general() -> discord.Embed:
     e = discord.Embed(
@@ -71,6 +71,10 @@ class HelpView(discord.ui.View):
         b.callback = cb
         return b
 
+# ---------- Autocomplete helpers (must be async) ----------
+async def user_lang_autocomplete(_interaction: discord.Interaction, current: str):
+    return _filter_lang_choices(current)
+
 class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -82,15 +86,13 @@ class UserCommands(commands.Cog):
         is_owner = (interaction.user.id == 762267166031609858)
         await interaction.followup.send(embed=embed_general(), view=HelpView(is_admin, is_owner), ephemeral=True)
 
-    # /ping
     @app_commands.command(name="ping", description="Check latency and health.")
     async def ping(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         ws = round(self.bot.latency * 1000)
         await interaction.followup.send(f"Pong. WebSocket latency: **{ws}ms**", ephemeral=True)
 
-    # /setmylang with autocomplete
-    @app_commands.autocomplete(lang=lambda it, cur: _filter_lang_choices(cur))
+    @app_commands.autocomplete(lang=user_lang_autocomplete)
     @app_commands.command(name="setmylang", description="Set your personal translation language.")
     async def setmylang(self, interaction: discord.Interaction, lang: str):
         await interaction.response.defer(ephemeral=True)
@@ -102,13 +104,13 @@ class UserCommands(commands.Cog):
         flag, name = LANG_LOOKUP.get(code, ("🏳️", code))
         await interaction.followup.send(f"Your language is now **{name} ({code}) {flag}**.", ephemeral=True)
 
-    # /langlist
     @app_commands.command(name="langlist", description="Show supported languages.")
     async def langlist(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        rows = []
-        line = []
-        for code, flag, name in sorted(LANG_LOOKUP.items()):
+        rows, line = [], []
+        # LANG_LOOKUP is {code: (flag,name)}
+        for code in sorted(LANG_LOOKUP.keys()):
+            flag, name = LANG_LOOKUP[code]
             line.append(f"{flag} `{code}` {name}")
             if len(line) == 3:
                 rows.append("   |   ".join(line)); line = []
