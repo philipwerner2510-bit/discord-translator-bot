@@ -19,6 +19,20 @@ PERMISSIONS_INT = (
     ).value
 )
 
+REQUIRED = [
+    "View Channels",
+    "Send Messages",
+    "Embed Links",
+    "Add Reactions",
+    "Read Message History",
+    "Use Application Commands",
+]
+OPTIONAL = [
+    "Manage Messages (cleanup)",
+    "Manage Emojis & Stickers (future)",
+    "Connect/Speak (future voice)",
+]
+
 class InviteCommand(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -32,9 +46,16 @@ class InviteCommand(commands.Cog):
             f"client_id={bot_id}&permissions={PERMISSIONS_INT}&scope=bot%20applications.commands"
         )
 
+        req = "• " + "\n• ".join(REQUIRED)
+        opt = "• " + "\n• ".join(OPTIONAL)
+
         embed = discord.Embed(
             title=INVITE_TITLE,
-            description=f"Click below to invite **{NAME}** to your server.",
+            description=(
+                f"Click the button below to invite **{NAME}** to your server.\n\n"
+                f"**Required permissions**\n{req}\n\n"
+                f"**Optional permissions**\n{opt}"
+            ),
             color=COLOR
         )
         embed.set_footer(text=FOOTER)
