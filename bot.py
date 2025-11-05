@@ -1,81 +1,32 @@
-import os
-import asyncio
-import discord
-from discord.ext import commands
-from utils import database
-from utils.brand import COLOR, NAME
-from datetime import datetime, timedelta
+# utils/brand.py
+# Centralized branding for Zephyra
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.messages = True
-intents.reactions = True
-intents.guilds = True
-intents.dm_messages = True
+# --- Names & titles
+NAME = "Zephyra"
+INVITE_TITLE = f"Invite {NAME}"
 
-bot = commands.Bot(command_prefix="!", intents=intents)
-bot.total_translations = 0
+# --- Colors
+PRIMARY = 0x00E6F6          # storm-cyan (main embed color)
+ACCENT  = PRIMARY           # many cogs import ACCENT; keep as alias
+COLOR   = PRIMARY           # backward-compat alias for older imports
+PURPLE  = 0x9B5CFF          # optional secondary accent
 
-COGS = [
-    "cogs.user_commands",
-    "cogs.admin_commands",
-    "cogs.translate",
-    "cogs.events",
-    "cogs.ops_commands",
-    "cogs.analytics_commands",
-    "cogs.invite_command",
-    "cogs.welcome",
-    "cogs.owner_commands",
-    "cogs.context_menu",
-]
+# --- Footer text
+FOOTER_DEV = "Zephyra — Developed by Polarix1954"
 
-async def setup_hook():
-    await database.init()
-    for ext in COGS:
-        try:
-            await bot.load_extension(ext)
-            print(f"✅ Loaded {ext}")
-        except Exception as e:
-            print(f"❌ Failed to load {ext}: {e}")
+# --- Emojis (your uploaded custom emojis)
+EMOJI = {
+    "base":     "<:Zephyra:1435530499408924672>",
+    "angry":    "<:Zephyra_angry:1435525299692372051>",
+    "confused": "<:Zephyra_confused:1435525352142274561>",
+    "excited":  "<:Zephyra_excited:1435525400364322847>",
+    "happy":    "<:Zephyra_happy:1435530725041504323>",
+    "love":     "<:Zephyra_love:1435525377081479229>",
+    "sad":      "<:Zephyra_sad:1435530792934572052>",
+    "shy":      "<:Zephyra_shy:1435525324627640361>",
+    "tired":    "<:Zephyra_tired:1435525424422719518>",
+}
 
-@bot.event
-async def on_ready():
-    try:
-        await bot.tree.sync()
-        print("🌍 Global slash commands synced")
-    except Exception as e:
-        print(f"Slash sync error: {e}")
-    print(f"✅ Logged in as {bot.user} — {NAME}")
-    if not hasattr(bot, "_presence_task"):
-        bot._presence_task = asyncio.create_task(update_presence())
-    if not hasattr(bot, "_daily_reset_task"):
-        bot._daily_reset_task = asyncio.create_task(daily_reset_translations())
-
-async def update_presence():
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        try:
-            guild_count = len(bot.guilds)
-            total_trans = getattr(bot, "total_translations", 0)
-            activity = discord.Game(name=f"{guild_count} servers • {total_trans} translations today")
-            await bot.change_presence(activity=activity)
-        except Exception as e:
-            print(f"Presence update failed: {e}")
-        await asyncio.sleep(300)
-
-async def daily_reset_translations():
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        now = datetime.utcnow()
-        next_reset = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        await asyncio.sleep((next_reset - now).total_seconds())
-        bot.total_translations = 0
-        print("🔄 Daily translations counter reset")
-
-if __name__ == "__main__":
-    async def main():
-        async with bot:
-            await setup_hook()
-            token = os.environ["BOT_TOKEN"]
-            await bot.start(token)
-    asyncio.run(main())
+def e(key: str, fallback: str = "") -> str:
+    """Return a custom emoji string by key, or fallback if missing."""
+    return EMOJI.get(key, fallback)
