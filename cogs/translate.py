@@ -31,10 +31,10 @@ def same_reaction(a: str, b: str) -> bool:
         return True
     ma, mb = CUSTOM_EMOJI_RE.match(a or ""), CUSTOM_EMOJI_RE.match(b or "")
     if ma and mb:
-        return ma.group(3) == mb.group(3)  # compare IDs
+        return ma.group(3) == mb.group(3)  # compare custom emoji IDs
     return False
 
-# --- FIX: autocomplete helper must be async
+# --- async autocomplete for languages
 async def ac_lang(interaction: discord.Interaction, current: str):
     current = (current or "").lower()
     items = [code for code in SUPPORTED_LANGS if current in code]
@@ -48,9 +48,10 @@ class Translate(commands.Cog):
         self.ai = OpenAI(api_key=OPENAI_API_KEY)
         self.sent = set()  # (message_id, user_id)
 
+    # /translate (manual)
     @app_commands.guild_only()
     @app_commands.describe(text="Text to translate", target_lang="Target language code (e.g., en, de, fr)")
-    @app_commands.autocomplete(target_lang=ac_lang)  # <-- FIXED
+    @app_commands.autocomplete(target_lang=ac_lang)
     @app_commands.command(name="translate", description="Translate a specific text with AI.")
     async def translate(self, interaction: discord.Interaction, text: str, target_lang: str):
         await interaction.response.defer(ephemeral=True)
@@ -60,8 +61,10 @@ class Translate(commands.Cog):
             return
         try:
             translated, src, usage = await self.ai_translate(text, target_lang)
-            await database.add_translation_stat(interaction.guild_id, interaction.user.id, used_ai=True,
-                                                tokens_in=usage.get("input",0), tokens_out=usage.get("output",0))
+            await database.add_translation_stat(
+                interaction.guild_id, interaction.user.id, used_ai=True,
+                tokens_in=usage.get("input",0), tokens_out=usage.get("output",0)
+            )
             embed = discord.Embed(description=translated, color=0x00E6F6)
             embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
             timestamp = datetime.utcnow().strftime("%H:%M UTC")
@@ -70,6 +73,7 @@ class Translate(commands.Cog):
         except Exception as e:
             await interaction.followup.send(f"❌ Translation failed: {e}", ephemeral=True)
 
+    # auto-react in selected channels
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -78,6 +82,7 @@ class Translate(commands.Cog):
         allowed = await database.get_translation_channels(gid)
         if not allowed or message.channel.id not in allowed:
             return
+
         bot_emote = normalize_emote_input(await database.get_bot_emote(gid) or "🔃")
         try:
             await message.add_reaction(bot_emote)
@@ -92,6 +97,7 @@ class Translate(commands.Cog):
             else:
                 print(f"[{gid}] Could not add unicode emote {bot_emote} in #{message.channel.id}")
 
+    # react-to-translate (DM)
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
         if user.bot or not reaction.message.guild:
@@ -101,10 +107,12 @@ class Translate(commands.Cog):
         allowed = await database.get_translation_channels(gid)
         if not allowed or msg.channel.id not in allowed:
             return
+
         configured = normalize_emote_input(await database.get_bot_emote(gid) or "🔃")
         reacted = emoji_to_str(reaction.emoji)
         if not same_reaction(configured, reacted):
             return
+
         key = (msg.id, user.id)
         if key in self.sent:
             return
@@ -119,8 +127,11 @@ class Translate(commands.Cog):
         try:
             src_text = msg.content or ""
             translated, src, usage = await self.ai_translate(src_text, user_lang)
-            await database.add_translation_stat(gid, user.id, used_ai=True,
-                                                tokens_in=usage.get("input",0), tokens_out=usage.get("output",0))
+            await database.add_translation_stat(
+                gid, user.id, used_ai=True,
+                tokens_in=usage.get("input",0), tokens_out=usage.get("output",0)
+            )
+
             embed = discord.Embed(description=translated, color=0x00E6F6)
             embed.set_author(name=msg.author.display_name, icon_url=msg.author.display_avatar.url)
             ts = msg.created_at.strftime("%H:%M UTC")
@@ -138,6 +149,7 @@ class Translate(commands.Cog):
         await asyncio.sleep(delay)
         self.sent.discard(key)
 
+    # AI translate helper
     async def ai_translate(self, text: str, target_lang: str):
         prompt_system = (
             "You are a concise translator. "
@@ -145,6 +157,7 @@ class Translate(commands.Cog):
             "Return ONLY the translated text."
         )
         prompt_user = f"Target language: {target_lang}\n\nText:\n{text}"
+
         resp = self.ai.chat.completions.create(
             model=AI_MODEL,
             messages=[
@@ -153,6 +166,7 @@ class Translate(commands.Cog):
             ],
             temperature=0,
         )
+
         out = resp.choices[0].message.content.strip()
         usage = {"input": 0, "output": 0}
         try:
@@ -161,6 +175,7 @@ class Translate(commands.Cog):
             usage["output"] = int(getattr(u, "completion_tokens", 0))
         except Exception:
             pass
+
         detected = "unknown"
         return out, detected, usage
 
