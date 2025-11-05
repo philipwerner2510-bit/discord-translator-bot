@@ -2,7 +2,7 @@
 NAME = "Zephyra"
 COLOR = 0x00E6F6  # Storm-cyan
 
-# ── Your custom Zephyra emojis (IDs from your list) ────────────────────────────
+# Your custom Zephyra emojis
 ZEPHYRA_EMOJIS = {
     "base":     "<:Zephyra:1435530499408924672>",
     "happy":    "<:Zephyra_happy:1435530725041504323>",
@@ -16,32 +16,27 @@ ZEPHYRA_EMOJIS = {
 }
 
 def emote(key: str, default: str = "") -> str:
-    """Get a Zephyra emoji by key; safe if missing."""
     return ZEPHYRA_EMOJIS.get(key, default)
 
-# ── Back-compat aliases (so existing cogs keep working) ───────────────────────
-# Branding / sections
-EMOJI_PRIMARY   = emote("happy")     # general branding icon in titles
-EMOJI_HIGHLIGHT = emote("excited")   # section headers / highlights
-EMOJI_ACCENT    = emote("base")      # subtle accent / identity
-
-# States
-EMOJI_THINKING  = emote("confused")  # “translating…” / busy
-EMOJI_SUCCESS   = emote("love")      # success confirmations (non-footer)
+# Back-compat aliases used by cogs
+EMOJI_PRIMARY   = emote("happy")     # titles / branding
+EMOJI_HIGHLIGHT = emote("excited")   # section headers
+EMOJI_ACCENT    = emote("base")      # subtle accent
+EMOJI_THINKING  = emote("confused")  # loading
+EMOJI_SUCCESS   = emote("love")      # success (non-footer)
 EMOJI_ERROR     = emote("angry")     # errors
-EMOJI_WARN      = emote("shy")       # soft warnings / “heads up”
-EMOJI_SAD       = emote("sad")       # failures / not found
-EMOJI_TIRED     = emote("tired")     # rate-limited / cooldown
+EMOJI_WARN      = emote("shy")       # soft warning
+EMOJI_SAD       = emote("sad")       # failures
+EMOJI_TIRED     = emote("tired")     # cooldown
 
-# ── Footer text (no emojis here—Discord doesn’t render custom emotes in footers)
 def footer() -> str:
+    # No emojis in footer (Discord doesn’t render customs there reliably)
     return "Zephyra • by @Polarix1954"
 
-# ── Presence templates (rotate these in bot.py if you want) ───────────────────
+# Presence (rotate in bot.py if desired)
 PRESENCE_LINES = [
     f"{EMOJI_ACCENT} Serving {{servers}} servers • {{translations}} translations today",
-    f"{EMOJI_HIGHLIGHT} Helping across languages",
-    f"{EMOJI_THINKING} Standing by",
+    "Assisting live translations",
+    "Standing by",
 ]
-# Or single template if you prefer one line everywhere:
 PRESENCE_TEMPLATE = "Serving {servers} servers • {translations} translations today"
