@@ -1,34 +1,44 @@
 # cogs/ops_commands.py
-import discord, aiohttp
+import os
+import discord
 from discord.ext import commands
 from discord import app_commands
-import os
-from utils.brand import COLOR
+from utils import database
+from datetime import datetime
 
-LIBRE_BASE = os.getenv("LIBRE_BASE", "https://libretranslate.com")
+OWNER_ID = int(os.getenv("OWNER_ID", "762267166031609858"))
 
-class OpsCommands(commands.Cog):
+def owner_only():
+    async def predicate(interaction: discord.Interaction):
+        return interaction.user.id == OWNER_ID
+    return app_commands.check(predicate)
+
+class Ops(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="librestatus", description="Check Libre endpoint health.")
-    async def librestatus(self, interaction: discord.Interaction):
+    @app_commands.command(name="stats", description="(Owner) Show AI usage and bot stats.")
+    @owner_only()
+    async def stats_cmd(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        url = f"{LIBRE_BASE.rstrip('/')}/languages"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as resp:
-                    ok = (resp.status == 200)
-                    ctype = resp.headers.get("Content-Type","")
-                    txt = await resp.text()
-            embed = discord.Embed(title="Libre Status", color=COLOR)
-            embed.add_field(name="URL", value=url, inline=False)
-            embed.add_field(name="HTTP", value=str( resp.status ), inline=True)
-            embed.add_field(name="Content-Type", value=ctype or "?", inline=True)
-            embed.add_field(name="OK", value="✅" if ok else "❌", inline=True)
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Libre ping failed: `{type(e).__name__}`", ephemeral=True)
+        guilds = len(self.bot.guilds)
+        users = sum(g.member_count or 0 for g in self.bot.guilds)
+
+        tokens_in, tokens_out, eur = await database.get_month_ai_usage()  # month aggregate
+        daily_trans, total_trans = await database.get_translation_totals()
+
+        uptime = "—"
+        if hasattr(self.bot, "start_time"):
+            uptime = str(datetime.utcnow() - self.bot.start_time).split(".")[0]
+
+        embed = discord.Embed(title="Zephyra • Stats (Owner)", color=0x00E6F6)
+        embed.add_field(name="Servers", value=str(guilds))
+        embed.add_field(name="Users (sum member_count)", value=str(users))
+        embed.add_field(name="Uptime", value=uptime, inline=False)
+        embed.add_field(name="AI Tokens (month)", value=f"in: {tokens_in:,} • out: {tokens_out:,}", inline=False)
+        embed.add_field(name="AI Cost (est.)", value=f"€ {eur:.4f}", inline=True)
+        embed.add_field(name="Translations", value=f"Today: {daily_trans:,} • Total: {total_trans:,}", inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 async def setup(bot):
-    await bot.add_cog(OpsCommands(bot))
+    await bot.add_cog(Ops(bot))
