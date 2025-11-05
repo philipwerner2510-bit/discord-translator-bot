@@ -1,13 +1,11 @@
-# bot.py
 import os
 import asyncio
-import traceback
 import discord
 from discord.ext import commands
-from utils.brand import COLOR as BOT_COLOR, PRESENCE_TEMPLATE, NAME as BOT_NAME
 from utils import database
+from utils.brand import COLOR, EMOJI_PRIMARY, EMOJI_THINKING, EMOJI_HIGHLIGHT, EMOJI_ACCENT, footer, PRESENCE_TEMPLATE
 
-PRESENCE_INTERVAL = 180  # seconds (rotate every 3 min)
+PRESENCE_INTERVAL = 40  # seconds
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -18,107 +16,57 @@ intents.dm_messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# runtime counters
 bot.total_translations = 0
-bot.libre_translations = 0
-bot.ai_translations = 0
-bot.cache_hits = 0
-bot.cache_misses = 0
-bot.cached_translations = 0
-
-EXTENSIONS = [
-    "cogs.user_commands",
-    "cogs.admin_commands",
-    "cogs.translate",
-    "cogs.events",
-    "cogs.ops_commands",
-    "cogs.analytics_commands",
-    "cogs.welcome",
-    "cogs.invite_command",
-    "cogs.owner_commands",
-]
-
-async def presence_loop():
-    """Rotate presence every PRESENCE_INTERVAL seconds."""
-    await bot.wait_until_ready()
-    i = 0
-    while not bot.is_closed():
-        try:
-            guild_count = len(bot.guilds)
-            total_trans = getattr(bot, "total_translations", 0)
-            variants = [
-                f"{guild_count} servers • {total_trans} translations today",
-                "Try /help",
-                "DM /invite to add me",
-            ]
-            activity = discord.Game(name=variants[i % len(variants)])
-            await bot.change_presence(activity=activity)
-            i += 1
-        except Exception as e:
-            print(f"⚠️ Presence update failed: {e}")
-        await asyncio.sleep(PRESENCE_INTERVAL)
-
-@bot.event
-async def on_ready():
-    # sync global commands
-    try:
-        await bot.tree.sync()
-        print("🌍 Global slash commands synced")
-    except Exception as e:
-        print(f"❌ Global sync failed: {type(e).__name__}: {e}")
-        traceback.print_exc()
-
-    print(f"✅ Logged in as {bot.user} ({bot.user.id}) — {BOT_NAME}")
-
-    # start presence loop once
-    if not hasattr(bot, "_presence_task"):
-        bot._presence_task = asyncio.create_task(presence_loop())
-
-@bot.event
-async def on_guild_join(guild: discord.Guild):
-    """
-    Best-effort: tint our top role to the brand color.
-    Only if we have Manage Roles and the role is editable.
-    Stay silent if we can't.
-    """
-    try:
-        me = guild.me or await guild.fetch_member(bot.user.id)
-        if not me:
-            return
-
-        # Need Manage Roles permission
-        perms = me.guild_permissions
-        if not perms.manage_roles:
-            return
-
-        role = me.top_role
-        # Skip if role is managed/default or not editable due to hierarchy
-        if role.is_default() or role.managed:
-            return
-
-        await role.edit(color=discord.Color(BOT_COLOR), reason=f"Set {BOT_NAME} brand color")
-    except discord.Forbidden:
-        # Missing permission or hierarchy issue — ignore quietly
-        pass
-    except Exception as e:
-        # Log unexpected errors only
-        print(f"⚠️ Could not tint role in {guild.name}: {e}")
+bot.start_time = None
 
 async def main():
-    # init DB (creates tables if missing)
     await database.init_db()
-
-    # load cogs
     async with bot:
-        for ext in EXTENSIONS:
+        for ext in [
+            "cogs.user_commands",
+            "cogs.admin_commands",
+            "cogs.translate",
+            "cogs.events",
+            "cogs.ops_commands",
+            "cogs.analytics_commands",
+            "cogs.welcome",
+            "cogs.invite_command",
+            "cogs.owner_commands",
+            "cogs.context_menu",
+        ]:
             try:
                 await bot.load_extension(ext)
                 print(f"✅ Loaded {ext}")
             except Exception as e:
                 print(f"❌ Failed to load {ext}: {e}")
+        await bot.start(os.environ["BOT_TOKEN"])
 
-        token = os.environ["BOT_TOKEN"]
-        await bot.start(token)
+@bot.event
+async def on_ready():
+    bot.start_time = discord.utils.utcnow()
+    await bot.tree.sync()
+    print(f"✅ Logged in as {bot.user}")
+    if not hasattr(bot, "_presence_task"):
+        bot._presence_task = asyncio.create_task(update_presence())
+
+async def update_presence():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            servers = len(bot.guilds)
+            today, total = await database.get_translation_totals()
+            lines = [
+                PRESENCE_TEMPLATE.format(servers=servers, translations=today),
+                f"{EMOJI_HIGHLIGHT} {today} translations today",
+                f"{EMOJI_ACCENT} Assisting {servers} servers",
+                f"{EMOJI_THINKING} Ready to help",
+            ]
+            for text in lines:
+                await bot.change_presence(activity=discord.Game(name=text))
+                await asyncio.sleep(PRESENCE_INTERVAL)
+        except Exception as e:
+            print(f"[presence] error: {e}")
+            await asyncio.sleep(PRESENCE_INTERVAL)
 
 if __name__ == "__main__":
     asyncio.run(main())
