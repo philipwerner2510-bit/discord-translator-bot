@@ -86,12 +86,40 @@ class AdminCommands(commands.Cog):
         channels = await database.get_translation_channels(gid)
         ch_txt = ", ".join(f"<#{c}>" for c in channels) if channels else "None"
         ai_enabled = await database.get_ai_enabled(gid)
+
         embed = discord.Embed(title="Server Settings", color=COLOR)
         embed.add_field(name="Default Language", value=default_lang, inline=False)
         embed.add_field(name="Bot Emote", value=emote, inline=True)
         embed.add_field(name="Error Channel", value=err, inline=True)
         embed.add_field(name="Translation Channels", value=ch_txt, inline=False)
         embed.add_field(name="AI Fallback", value="Enabled" if ai_enabled else "Disabled", inline=True)
+
+        # ---- Permission diagnostics ----
+        me = interaction.guild.me
+        def mark(ok): return "✅" if ok else "⚠️"
+        if me:
+            cperms = interaction.channel.permissions_for(me)
+            embed.add_field(
+                name="Channel Permissions (here)",
+                value=(
+                    f"{mark(cperms.send_messages)} Send Messages\n"
+                    f"{mark(cperms.embed_links)} Embed Links\n"
+                    f"{mark(cperms.add_reactions)} Add Reactions\n"
+                    f"{mark(cperms.read_message_history)} Read Message History\n"
+                ),
+                inline=False
+            )
+            gperms = me.guild_permissions
+            embed.add_field(
+                name="Guild Permissions",
+                value=(
+                    f"{mark(gperms.manage_roles)} Manage Roles\n"
+                    f"{mark(gperms.manage_emojis)} Manage Emojis & Stickers\n"
+                    f"{mark(gperms.use_application_commands)} Use Application Commands\n"
+                ),
+                inline=False
+            )
+
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="aisettings", description="Enable or disable AI fallback.")
