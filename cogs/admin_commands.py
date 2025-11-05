@@ -1,20 +1,24 @@
 # cogs/admin_commands.py
+import re
 import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import database
 from utils.brand import COLOR
-from cogs.translate import _filter_lang_choices, SUPPORTED_LANGS, LANG_LOOKUP
-import re
+from cogs.translate import SUPPORTED_LANGS, LANG_LOOKUP, _filter_lang_choices
 
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
+
+# ---------- Autocomplete helpers (must be async) ----------
+async def server_lang_autocomplete(_interaction: discord.Interaction, current: str):
+    return _filter_lang_choices(current)
 
 class AdminCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
     @app_commands.guild_only()
-    @app_commands.autocomplete(lang=lambda it, cur: _filter_lang_choices(cur))
+    @app_commands.autocomplete(lang=server_lang_autocomplete)
     @app_commands.command(name="defaultlang", description="Set the default translation language for this server.")
     async def defaultlang(self, interaction: discord.Interaction, lang: str):
         await interaction.response.defer(ephemeral=True)
