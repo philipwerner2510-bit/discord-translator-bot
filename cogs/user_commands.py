@@ -23,7 +23,7 @@ def embed_general() -> discord.Embed:
         name="`/translate <text> <target_lang>`",
         value=(
             "Translate **text** to a chosen **language code** (e.g. `en`, `de`, `fr`).\n"
-            "• Uses **AI translation only** (no Libre fallback).\n"
+            "• Uses **AI translation only**.\n"
             "• Returns a clean translated message."
         ),
         inline=False,
@@ -36,22 +36,9 @@ def embed_general() -> discord.Embed:
         ),
         inline=False,
     )
-    e.add_field(
-        name="`/ping`",
-        value="Quick latency check.",
-        inline=False,
-    )
-    e.add_field(
-        name="`/guide`",
-        value="Show the quick-start guide for all users.",
-        inline=False,
-    )
-    # optional, if you have /invite live in your build
-    e.add_field(
-        name="`/invite`",
-        value="DMs you an invite link to add Zephyra to another server.",
-        inline=False,
-    )
+    e.add_field(name="`/ping`", value="Quick latency check.", inline=False)
+    e.add_field(name="`/guide`", value="Show the quick-start guide for all users.", inline=False)
+    e.add_field(name="`/invite`", value="DMs you an invite link to add Zephyra to another server.", inline=False)
     e.set_footer(text="Created by @Polarix1954")
     return e
 
@@ -63,18 +50,14 @@ def embed_admin() -> discord.Embed:
     )
     e.add_field(
         name="`/defaultlang <lang>`",
-        value=(
-            "Set the **server default language** (fallback for users who didn’t set a personal one).\n"
-            "• Supports **autocomplete** for codes."
-        ),
+        value="Set the **server default language** (fallback if a user didn't set a personal one). Autocomplete supported.",
         inline=False,
     )
     e.add_field(
         name="`/channelselection`",
         value=(
             "Select **which channels** Zephyra should watch and react in.\n"
-            "• The bot adds a reaction to messages in these channels. "
-            "Users can click it to receive a DM translation."
+            "Users can click the reaction to receive a **DM translation**."
         ),
         inline=False,
     )
@@ -82,23 +65,13 @@ def embed_admin() -> discord.Embed:
         name="`/emote <emoji>`",
         value=(
             "Set the **reaction emote** Zephyra uses in watched channels.\n"
-            "• Accepts **Unicode** (e.g. `👍`) **or** a **custom emoji from THIS server** (e.g. `<:name:id>`).\n"
-            "• Validates that custom emoji actually belongs to the current server."
+            "• Accepts **Unicode** (e.g. `👍`) or a **custom emoji from THIS server** (`<:name:id>`).\n"
+            "• Validates the emoji belongs to this server."
         ),
         inline=False,
     )
-    e.add_field(
-        name="`/seterrorchannel <#channel | none>`",
-        value=(
-            "Set an **error log channel**, or pass `none` to clear."
-        ),
-        inline=False,
-    )
-    e.add_field(
-        name="`/settings`",
-        value="Show current server settings (default lang, emote, error channel, watched channels).",
-        inline=False,
-    )
+    e.add_field(name="`/seterrorchannel <#channel | none>`", value="Set an **error log channel** or clear with `none`.", inline=False)
+    e.add_field(name="`/settings`", value="Show current server settings.", inline=False)
     e.set_footer(text="Created by @Polarix1954")
     return e
 
@@ -110,10 +83,7 @@ def embed_owner() -> discord.Embed:
     )
     e.add_field(
         name="`/stats`",
-        value=(
-            "Show **bot stats**: servers, uptime, **monthly AI tokens** (in/out) & **estimated EUR**, "
-            "and translation totals (today / lifetime)."
-        ),
+        value="Show servers, uptime, **monthly AI tokens** (in/out) & **estimated EUR**, and translation totals (today / lifetime).",
         inline=False,
     )
     e.set_footer(text="Created by @Polarix1954 • Owner only")
@@ -124,8 +94,6 @@ class HelpView(discord.ui.View):
         super().__init__(timeout=120)
         self.show_admin = show_admin
         self.show_owner = show_owner
-
-        # Always add General
         self.add_item(self.GeneralButton())
         if show_admin:
             self.add_item(self.AdminButton())
@@ -135,14 +103,12 @@ class HelpView(discord.ui.View):
     class GeneralButton(discord.ui.Button):
         def __init__(self):
             super().__init__(label="General", style=discord.ButtonStyle.primary)
-
         async def callback(self, interaction: discord.Interaction):
             await interaction.response.edit_message(embed=embed_general(), view=self.view)
 
     class AdminButton(discord.ui.Button):
         def __init__(self):
             super().__init__(label="Admin", style=discord.ButtonStyle.secondary)
-
         async def callback(self, interaction: discord.Interaction):
             view: HelpView = self.view  # type: ignore
             if not view.show_admin:
@@ -152,7 +118,6 @@ class HelpView(discord.ui.View):
     class OwnerButton(discord.ui.Button):
         def __init__(self):
             super().__init__(label="Owner", style=discord.ButtonStyle.secondary)
-
         async def callback(self, interaction: discord.Interaction):
             view: HelpView = self.view  # type: ignore
             if not view.show_owner:
@@ -163,24 +128,20 @@ class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # /help
     @app_commands.command(name="help", description="Show Zephyra help.")
     async def help(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
         is_admin = interaction.guild and user.guild_permissions.administrator
-        show_owner = is_owner(user)
+        show_owner = (user.id == OWNER_ID)
         v = HelpView(show_admin=bool(is_admin or show_owner), show_owner=show_owner)
         await interaction.followup.send(embed=embed_general(), view=v, ephemeral=True)
 
-    # /ping (everyone)
     @app_commands.command(name="ping", description="Check bot latency.")
     async def ping(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         latency_ms = round(self.bot.latency * 1000)
         await interaction.followup.send(f"🏓 Pong! `{latency_ms} ms`", ephemeral=True)
-
-    # NOTE: /guide exists in another cog (welcome/guide). We keep /help clean here.
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
