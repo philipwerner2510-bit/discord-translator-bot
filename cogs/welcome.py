@@ -1,49 +1,48 @@
-# cogs/welcome.py
 import os
 import discord
 from discord.ext import commands
 from discord import app_commands
+from utils.brand import COLOR, EMOJI_PRIMARY, EMOJI_HIGHLIGHT, EMOJI_ACCENT, footer
 
 OWNER_ID = int(os.getenv("OWNER_ID", "762267166031609858"))
-BRAND_COLOR = 0x00E6F6  # Zephyra cyan
 
-def build_guide_embed(guild: discord.Guild | None) -> discord.Embed:
+def guide_embed() -> discord.Embed:
     e = discord.Embed(
-        title="Welcome to Zephyra — Quick Start",
-        description="Zephyra makes multilingual chat effortless. Here’s how to use her in your server.",
-        color=BRAND_COLOR,
+        title=f"{EMOJI_PRIMARY} Welcome to Zephyra — Quick Start",
+        description="Make multilingual chat effortless in a minute.",
+        color=COLOR,
     )
     e.add_field(
         name="For Everyone",
         value=(
-            "• **React to a message** with Zephyra’s emote to get a **DM translation** in your language.\n"
-            "• Set your personal language with **`/setmylang <code>`** (autocomplete supported).\n"
-            "• Translate specific text manually using **`/translate <text> <target_lang>`**.\n"
-            "• Check responsiveness with **`/ping`**."
+            f"{EMOJI_HIGHLIGHT} React to a message with Zephyra’s emote to get a **DM translation**.\n"
+            f"{EMOJI_ACCENT} Set your personal language: **`/setmylang <code>`** (autocomplete).\n"
+            f"{EMOJI_HIGHLIGHT} Translate text: **`/translate <text> <target_lang>`**.\n"
+            "🏓 **/ping** to check responsiveness."
         ),
         inline=False,
     )
     e.add_field(
-        name="For Admins (Setup in 60s)",
+        name="For Admins (60s setup)",
         value=(
-            "• Choose channels Zephyra should watch: **`/channelselection`**.\n"
-            "• Set server default language: **`/defaultlang <code>`**.\n"
-            "• Pick the reaction emote (Unicode or **this server’s** custom emoji): **`/emote <emoji>`**.\n"
-            "• Optional error logs channel: **`/seterrorchannel <#channel | none>`**.\n"
-            "• Review settings: **`/settings`**."
+            "• Choose watched channels: **`/channelselection`**\n"
+            "• Default language: **`/defaultlang <code>`**\n"
+            "• Reaction emote (Unicode or this server’s custom): **`/emote <emoji>`**\n"
+            "• Error logs (optional): **`/seterrorchannel <#channel | none>`**\n"
+            "• Review config: **`/settings`**"
         ),
         inline=False,
     )
     e.add_field(
         name="Tips",
         value=(
-            "• Use a few common language codes (e.g., `en`, `de`, `fr`).\n"
-            "• Prefer **server custom emoji** for `/emote` to avoid permissions issues.\n"
-            "• Zephyra only reacts in channels selected via **`/channelselection`**."
+            "• Use common codes like `en`, `de`, `fr`.\n"
+            "• Prefer this server’s custom emoji for `/emote`.\n"
+            "• Zephyra reacts only in channels from **`/channelselection`**."
         ),
         inline=False,
     )
-    e.set_footer(text="Created by @Polarix1954")
+    e.set_footer(text=footer())
     return e
 
 class Welcome(commands.Cog):
@@ -52,7 +51,7 @@ class Welcome(commands.Cog):
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
-        embed = build_guide_embed(guild)
+        embed = guide_embed()
         target = None
         for ch in guild.text_channels:
             perms = ch.permissions_for(guild.me)
@@ -71,12 +70,12 @@ class Welcome(commands.Cog):
         if not interaction.user.guild_permissions.administrator and interaction.user.id != OWNER_ID:
             return await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         await interaction.response.defer(ephemeral=True)
-        embed = build_guide_embed(interaction.guild)
+        embed = guide_embed()
         try:
-            await interaction.channel.send(embed=embed)  # public
-            await interaction.followup.send("✅ Posted the guide in this channel.", ephemeral=True)
+            await interaction.channel.send(embed=embed)
+            await interaction.followup.send("✅ Posted the guide.", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"❌ Could not send the guide here: `{e}`", ephemeral=True)
+            await interaction.followup.send(f"❌ Could not send here: `{e}`", ephemeral=True)
 
     @app_commands.guild_only()
     @app_commands.command(name="guidepreview", description="Preview Zephyra’s quick-start guide (ephemeral).")
@@ -84,8 +83,7 @@ class Welcome(commands.Cog):
         if not interaction.user.guild_permissions.administrator and interaction.user.id != OWNER_ID:
             return await interaction.response.send_message("❌ Admins only.", ephemeral=True)
         await interaction.response.defer(ephemeral=True)
-        embed = build_guide_embed(interaction.guild)
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=guide_embed(), ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Welcome(bot))
