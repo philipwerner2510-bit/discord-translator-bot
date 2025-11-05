@@ -4,6 +4,7 @@ from discord import app_commands
 from discord.ext import commands
 from utils.brand import NAME, COLOR, INVITE_TITLE, FOOTER
 
+# Build a sensible permission set (required + helpful)
 PERMISSIONS_INT = (
     discord.Permissions(
         view_channel=True,
@@ -12,9 +13,9 @@ PERMISSIONS_INT = (
         add_reactions=True,
         read_message_history=True,
         use_application_commands=True,
-        manage_messages=True,
-        manage_emojis_and_stickers=True,
-        connect=True, speak=True
+        manage_messages=True,                # optional but helpful for cleanup
+        manage_emojis_and_stickers=True,     # optional for future features
+        connect=True, speak=True             # optional for future voice features
     ).value
 )
 
@@ -24,9 +25,7 @@ class InviteCommand(commands.Cog):
 
     @app_commands.command(name="invite", description=f"Get an invite link to add {NAME} to a server.")
     async def invite(self, interaction: discord.Interaction):
-        user = interaction.user
         await interaction.response.defer(ephemeral=True)
-
         bot_id = self.bot.user.id
         invite_url = (
             f"https://discord.com/oauth2/authorize?"
@@ -48,7 +47,7 @@ class InviteCommand(commands.Cog):
         ))
 
         try:
-            await user.send(embed=embed, view=view)
+            await interaction.user.send(embed=embed, view=view)
             await interaction.followup.send("I sent you a DM with the invite link.", ephemeral=True)
         except discord.Forbidden:
             await interaction.followup.send(
