@@ -1,156 +1,122 @@
+# cogs/user_commands.py
 import discord
 from discord.ext import commands
 from discord import app_commands
-from utils import database
+from utils.brand import NAME, COLOR, HELP_TITLE, FOOTER
+from cogs.translate import _filter_lang_choices, SUPPORTED_LANGS, LANG_LOOKUP
 
-BOT_COLOR = 0xDE002A
-OWNER_ID = 762267166031609858
-
-LANG_CATALOG = [
-    ("en","🇬🇧","English"), ("de","🇩🇪","German"), ("fr","🇫🇷","French"), ("es","🇪🇸","Spanish"),
-    ("it","🇮🇹","Italian"), ("pt","🇵🇹","Portuguese"), ("ru","🇷🇺","Russian"), ("zh","🇨🇳","Chinese"),
-    ("ja","🇯🇵","Japanese"), ("ko","🇰🇷","Korean"), ("ar","🇸🇦","Arabic"), ("tr","🇹🇷","Turkish"),
-    ("nl","🇳🇱","Dutch"), ("sv","🇸🇪","Swedish"), ("no","🇳🇴","Norwegian"), ("da","🇩🇰","Danish"),
-    ("fi","🇫🇮","Finnish"), ("pl","🇵🇱","Polish"), ("cs","🇨🇿","Czech"), ("el","🇬🇷","Greek"),
-    ("uk","🇺🇦","Ukrainian"), ("he","🇮🇱","Hebrew"), ("vi","🇻🇳","Vietnamese"), ("th","🇹🇭","Thai"),
-    ("id","🇮🇩","Indonesian"), ("ms","🇲🇾","Malay"), ("fa","🇮🇷","Persian"), ("sw","🇰🇪","Swahili"),
-    ("am","🇪🇹","Amharic"), ("yo","🇳🇬","Yoruba"), ("ha","🇳🇬","Hausa"),
-]
-SUPPORTED = {c for c,_,_ in LANG_CATALOG}
-
-def _choices(q: str):
-    q = (q or "").lower().strip()
-    vals=[]
-    for code, flag, name in LANG_CATALOG:
-        if not q or q in code or q in name.lower():
-            vals.append(app_commands.Choice(name=f"{flag} {name} ({code})"[:100], value=code))
-        if len(vals) >= 25: break
-    return vals or [app_commands.Choice(name=f"{f} {n} ({c})"[:100], value=c)
-                    for c,f,n in LANG_CATALOG[:25]]
-
-async def lang_autocomplete(_itx: discord.Interaction, current: str):
-    return _choices(current)
-
-def embed_general():
-    return discord.Embed(
-        title="🤝 User Commands",
+def embed_general() -> discord.Embed:
+    e = discord.Embed(
+        title=HELP_TITLE,
         description=(
-            "• **/setmylang** — choose your language (autocomplete)\n"
-            "• **/translate &lt;text&gt; &lt;lang&gt;** — manual translate (autocomplete)\n"
-            "• **/ping** — latency\n"
-            "• **/help** — open this menu\n"
-            "• **/langlist** — language codes\n"
-            "• **/leaderboard** — top translators"
+            f"**{NAME}** helps you translate and manage communication with an elegant, unobtrusive UX.\n\n"
+            "**General Commands**\n"
+            "• `/translate <text> <target_lang>` — translate text.\n"
+            "• `/setmylang <lang>` — set your personal target language.\n"
+            "• `/langlist` — show supported languages.\n"
+            "• `/invite` — DM yourself an invite button.\n"
+            "• `/ping` — latency and health.\n"
+            "• `/help` — open this menu.\n"
         ),
-        color=BOT_COLOR
+        color=COLOR
     )
+    e.set_footer(text=FOOTER)
+    return e
 
-def embed_admin():
-    return discord.Embed(
-        title="🛠️ Admin Commands",
+def embed_admin() -> discord.Embed:
+    e = discord.Embed(
+        title="Admin Tools",
         description=(
-            "• **/defaultlang &lt;lang&gt;** — set server default (autocomplete)\n"
-            "• **/channelselection** — choose translation channels\n"
-            "• **/emote &lt;emoji&gt;** — reaction emoji (falls back to 🔁)\n"
-            "• **/seterrorchannel &lt;#chan|none&gt;** — error logs\n"
-            "• **/librestatus** — check Libre/Argos health\n"
-            "• **/stats** — bot stats & AI usage\n"
-            "• **/guide** — post welcome guide"
+            "**Setup & Control**\n"
+            "• `/channelselection` — select channels for reaction-based translation.\n"
+            "• `/defaultlang <lang>` — set server default language.\n"
+            "• `/aisettings <true|false>` — enable AI fallback.\n"
+            "• `/settings` — show server config.\n"
+            "• `/librestatus` — check Libre endpoint.\n"
+            "• `/stats` — usage & counters.\n"
+            "• `/leaderboard` — top translators.\n"
+            "• `/guide` — post the quick-start guide.\n"
         ),
-        color=BOT_COLOR
+        color=COLOR
     )
+    e.set_footer(text=FOOTER)
+    return e
 
-def embed_owner():
-    return discord.Embed(
-        title="👑 Owner Commands",
+def embed_owner() -> discord.Embed:
+    e = discord.Embed(
+        title="Owner Tools",
         description=(
-            "• **/reload** — reload cogs\n"
-            "• **/backup** — backup DB\n"
-            "• **/summonpolarix** — DM invite link button"
+            "**Maintenance**\n"
+            "• `/reload` — hot-reload all cogs.\n"
+            "• `/backup` — DM database backup.\n"
+            "• `/selftest` — full health check.\n"
         ),
-        color=BOT_COLOR
+        color=COLOR
     )
+    e.set_footer(text=FOOTER)
+    return e
 
 class HelpView(discord.ui.View):
     def __init__(self, is_admin: bool, is_owner: bool):
         super().__init__(timeout=120)
-        # build buttons dynamically (no decorator = no duplicates)
-        btn_g = discord.ui.Button(label="General", style=discord.ButtonStyle.primary)
-        async def cb_g(interaction: discord.Interaction):
-            await interaction.response.edit_message(embed=embed_general(), view=HelpView(
-                interaction.user.guild_permissions.administrator if interaction.guild else False,
-                interaction.user.id == OWNER_ID
-            ))
-        btn_g.callback = cb_g
-        self.add_item(btn_g)
+        self.add_item(self._btn("General", embed_general(), primary=True))
+        self.add_item(self._btn("Admin", embed_admin(), disabled=not is_admin))
+        self.add_item(self._btn("Owner", embed_owner(), disabled=not is_owner))
 
-        if is_admin:
-            btn_a = discord.ui.Button(label="Admin", style=discord.ButtonStyle.secondary)
-            async def cb_a(interaction: discord.Interaction):
-                if not (interaction.guild and interaction.user.guild_permissions.administrator):
-                    return await interaction.response.defer()
-                await interaction.response.edit_message(embed=embed_admin(), view=HelpView(True, interaction.user.id == OWNER_ID))
-            btn_a.callback = cb_a
-            self.add_item(btn_a)
-
-        if is_owner:
-            btn_o = discord.ui.Button(label="Owner", style=discord.ButtonStyle.secondary)
-            async def cb_o(interaction: discord.Interaction):
-                if interaction.user.id != OWNER_ID:
-                    return await interaction.response.defer()
-                await interaction.response.edit_message(embed=embed_owner(), view=HelpView(
-                    interaction.user.guild_permissions.administrator if interaction.guild else False,
-                    True
-                ))
-            btn_o.callback = cb_o
-            self.add_item(btn_o)
+    def _btn(self, label: str, embed: discord.Embed, primary=False, disabled=False):
+        style = discord.ButtonStyle.primary if primary else discord.ButtonStyle.secondary
+        b = discord.ui.Button(label=label, style=style, disabled=disabled)
+        async def cb(it: discord.Interaction):
+            await it.response.edit_message(embed=embed, view=self)
+        b.callback = cb
+        return b
 
 class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="help", description="Show commands (User/Admin/Owner).")
+    @app_commands.command(name="help", description=f"Show {NAME}'s help menu.")
     async def help(self, interaction: discord.Interaction):
-        is_admin = interaction.user.guild_permissions.administrator if interaction.guild else False
-        is_owner = interaction.user.id == OWNER_ID
-        await interaction.response.send_message(embed=embed_general(), view=HelpView(is_admin, is_owner), ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        is_admin = bool(interaction.guild and interaction.user.guild_permissions.administrator)
+        is_owner = (interaction.user.id == 762267166031609858)
+        await interaction.followup.send(embed=embed_general(), view=HelpView(is_admin, is_owner), ephemeral=True)
 
-    @app_commands.command(name="guide", description="(Admin) Send the onboarding guide embed.")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def guide(self, interaction: discord.Interaction):
-        e = discord.Embed(
-            title="👋 Welcome to Demon Translator",
-            description=(
-                "✅ React with the bot's emoji to receive a DM translation.\n"
-                "✅ Set your language with `/setmylang` (autocomplete).\n"
-                "✅ Translate any text with `/translate <text>`.\n"
-                "ℹ️ Use `/help` anytime for a full command menu."
-            ),
-            color=BOT_COLOR
-        )
-        await interaction.response.send_message(embed=e)
-
-    @app_commands.command(name="ping", description="Check latency.")
+    # /ping
+    @app_commands.command(name="ping", description="Check latency and health.")
     async def ping(self, interaction: discord.Interaction):
-        await interaction.response.send_message(f"Pong! `{round(interaction.client.latency*1000)}ms`", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        ws = round(self.bot.latency * 1000)
+        await interaction.followup.send(f"Pong. WebSocket latency: **{ws}ms**", ephemeral=True)
 
-    @app_commands.autocomplete(lang=lang_autocomplete)
+    # /setmylang with autocomplete
+    @app_commands.autocomplete(lang=lambda it, cur: _filter_lang_choices(cur))
     @app_commands.command(name="setmylang", description="Set your personal translation language.")
     async def setmylang(self, interaction: discord.Interaction, lang: str):
-        lang = lang.lower()
-        if lang not in SUPPORTED:
-            return await interaction.response.send_message("❌ Invalid language code.", ephemeral=True)
-        await database.set_user_lang(interaction.user.id, lang)
-        await interaction.response.send_message(f"✅ Your language is now `{lang}`.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        code = lang.lower()
+        if code not in SUPPORTED_LANGS:
+            return await interaction.followup.send("❌ Unsupported language. Please use the suggestions.", ephemeral=True)
+        from utils import database
+        await database.set_user_lang(interaction.user.id, code)
+        flag, name = LANG_LOOKUP.get(code, ("🏳️", code))
+        await interaction.followup.send(f"Your language is now **{name} ({code}) {flag}**.", ephemeral=True)
 
-    @app_commands.command(name="langlist", description="Show supported language codes.")
+    # /langlist
+    @app_commands.command(name="langlist", description="Show supported languages.")
     async def langlist(self, interaction: discord.Interaction):
-        rows=[]
-        for i,(code,flag,name) in enumerate(LANG_CATALOG,1):
-            rows.append(f"{flag} `{code}` {name}")
-        e = discord.Embed(title="🌐 Supported Languages", description="\n".join(rows), color=BOT_COLOR)
-        e.set_footer(text=f"Total: {len(LANG_CATALOG)}")
-        await interaction.response.send_message(embed=e, ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        rows = []
+        line = []
+        for code, flag, name in sorted(LANG_LOOKUP.items()):
+            line.append(f"{flag} `{code}` {name}")
+            if len(line) == 3:
+                rows.append("   |   ".join(line)); line = []
+        if line:
+            rows.append("   |   ".join(line))
+        embed = discord.Embed(title=f"{NAME} Languages", description="\n".join(rows), color=COLOR)
+        embed.set_footer(text=FOOTER)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
