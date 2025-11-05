@@ -1,33 +1,50 @@
-import os, discord
-from discord.ext import commands
+# cogs/owner_commands.py
+from __future__ import annotations
+import discord
 from discord import app_commands
-from utils.brand import COLOR, footer
+from discord.ext import commands
+from utils.brand import ACCENT, NAME
 
-OWNER_ID = int(os.getenv("OWNER_ID", "762267166031609858"))
-
-def owner_only():
-    def predicate(it: discord.Interaction):
-        return it.user.id == OWNER_ID
-    return app_commands.check(lambda it: predicate(it))
+def is_owner():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        app_info = await interaction.client.application_info()
+        return interaction.user.id == app_info.owner.id
+    return app_commands.check(predicate)
 
 class Owner(commands.Cog):
-    def __init__(self, bot): self.bot = bot
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
 
-    @app_commands.command(name="reload", description="Owner: reload a cog by name (e.g., cogs.translate).")
-    @owner_only()
-    async def reload(self, interaction: discord.Interaction, cog: str):
-        try:
-            await self.bot.reload_extension(cog)
-            e = discord.Embed(description=f"✅ Reloaded `{cog}`", color=COLOR)
-        except Exception as e:
-            e = discord.Embed(description=f"❌ Reload failed: `{e}`", color=COLOR)
-        e.set_footer(text=footer()); await interaction.response.send_message(embed=e, ephemeral=True)
+    owner = app_commands.Group(
+        name="owner",
+        description="Owner-only utilities",
+        guild_only=False,
+    )
 
-    @app_commands.command(name="stats", description="Owner: show bot stats.")
-    @owner_only()
-    async def stats(self, interaction: discord.Interaction):
-        guilds = len(self.bot.guilds); latency = round(self.bot.latency*1000)
-        e = discord.Embed(title="Owner Stats", description=f"Guilds: **{guilds}**\nLatency: **{latency} ms**", color=COLOR)
-        e.set_footer(text=footer()); await interaction.response.send_message(embed=e, ephemeral=True)
+    @owner.command(name="guilds", description="List the guilds this bot is in.")
+    @is_owner()
+    async def owner_guilds(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        guilds = sorted(self.bot.guilds, key=lambda g: g.member_count or 0, reverse=True)
+        lines = [f"• **{g.name}** — {g.member_count or 0} members (ID {g.id})" for g in guilds[:25]]
+        embed = discord.Embed(title="Owner • Guilds", description="\n".join(lines) or "None", color=ACCENT)
+        embed.set_author(name=NAME)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
-async def setup(bot): await bot.add_cog(Owner(bot))
+    # Renamed from /stats to avoid collision with analytics_commands
+    @owner.command(name="ownerstats", description="Bot stats (owner view).")
+    @is_owner()
+    async def owner_stats(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        gcount = len(self.bot.guilds)
+        ucount = sum(g.member_count or 0 for g in self.bot.guilds)
+        embed = discord.Embed(
+            title="Owner • Stats",
+            description=f"Servers: **{gcount}**\nUsers (approx): **{ucount:,}**",
+            color=ACCENT,
+        ).set_author(name=NAME)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Owner(bot))
+    bot.tree.add_command(Owner.owner)
