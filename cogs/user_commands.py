@@ -9,8 +9,7 @@ def embed_general() -> discord.Embed:
     e = discord.Embed(
         title=HELP_TITLE,
         description=(
-            f"**{NAME}** helps you translate and manage communication with an elegant, unobtrusive UX.\n\n"
-            "**General Commands**\n"
+            "**Commands for everyone**\n"
             "• `/translate <text> <target_lang>` — translate text.\n"
             "• `/setmylang <lang>` — set your personal target language.\n"
             "• `/langlist` — show supported languages.\n"
@@ -60,8 +59,8 @@ class HelpView(discord.ui.View):
     def __init__(self, is_admin: bool, is_owner: bool):
         super().__init__(timeout=120)
         self.add_item(self._btn("General", embed_general(), primary=True))
-        self.add_item(self._btn("Admin", embed_admin(), disabled=not is_admin))
-        self.add_item(self._btn("Owner", embed_owner(), disabled=not is_owner))
+        self.add_item(self._btn("Admin",   embed_admin(),   disabled=not is_admin))
+        self.add_item(self._btn("Owner",   embed_owner(),   disabled=not is_owner))
 
     def _btn(self, label: str, embed: discord.Embed, primary=False, disabled=False):
         style = discord.ButtonStyle.primary if primary else discord.ButtonStyle.secondary
@@ -71,7 +70,7 @@ class HelpView(discord.ui.View):
         b.callback = cb
         return b
 
-# ---------- Autocomplete helpers (must be async) ----------
+# ---------- Autocomplete (must be async) ----------
 async def user_lang_autocomplete(_interaction: discord.Interaction, current: str):
     return _filter_lang_choices(current)
 
@@ -108,7 +107,6 @@ class UserCommands(commands.Cog):
     async def langlist(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         rows, line = [], []
-        # LANG_LOOKUP is {code: (flag,name)}
         for code in sorted(LANG_LOOKUP.keys()):
             flag, name = LANG_LOOKUP[code]
             line.append(f"{flag} `{code}` {name}")
