@@ -3,12 +3,25 @@ import os
 import discord
 from discord.ext import commands
 from discord import app_commands
+from utils import database
 
 OWNER_ID = int(os.getenv("OWNER_ID", "762267166031609858"))
 BRAND_COLOR = 0x00E6F6  # Zephyra cyan
 
+SUPPORTED_LANGS = [
+    "en","zh","hi","es","fr","ar","bn","pt","ru","ja",
+    "de","jv","ko","vi","mr","ta","ur","tr","it","th",
+    "gu","kn","ml","pa","or","fa","sw","am","ha","yo"
+]
+
 def is_owner(user: discord.abc.User) -> bool:
     return user.id == OWNER_ID
+
+# async autocomplete for langs
+async def ac_lang(interaction: discord.Interaction, current: str):
+    current = (current or "").lower()
+    items = [code for code in SUPPORTED_LANGS if current in code]
+    return [app_commands.Choice(name=code, value=code) for code in items[:25]]
 
 def embed_general() -> discord.Embed:
     e = discord.Embed(
@@ -142,6 +155,21 @@ class UserCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         latency_ms = round(self.bot.latency * 1000)
         await interaction.followup.send(f"🏓 Pong! `{latency_ms} ms`", ephemeral=True)
+
+    # NEW: /setmylang with autocomplete and validation
+    @app_commands.command(name="setmylang", description="Set your personal default translation language.")
+    @app_commands.describe(lang="Language code (e.g., en, de, fr)")
+    @app_commands.autocomplete(lang=ac_lang)
+    async def setmylang(self, interaction: discord.Interaction, lang: str):
+        await interaction.response.defer(ephemeral=True)
+        lang = (lang or "").lower().strip()
+        if lang not in SUPPORTED_LANGS:
+            return await interaction.followup.send(
+                f"❌ Unsupported language code `{lang}`. Try one of: {', '.join(SUPPORTED_LANGS)}",
+                ephemeral=True
+            )
+        await database.set_user_lang(interaction.user.id, lang)
+        await interaction.followup.send(f"✅ Your personal language has been set to `{lang}`.", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
