@@ -1,80 +1,65 @@
 # cogs/invite_command.py
 import discord
-from discord import app_commands
 from discord.ext import commands
-from utils.brand import NAME, COLOR, INVITE_TITLE, FOOTER
+from discord import app_commands
+from utils.brand import COLOR, EMOJI_PRIMARY, EMOJI_HIGHLIGHT, footer
 
-# Build a sensible permission set (required + helpful)
-PERMISSIONS_INT = (
-    discord.Permissions(
-        view_channel=True,
-        send_messages=True,
-        embed_links=True,
-        add_reactions=True,
-        read_message_history=True,
-        use_application_commands=True,
-        manage_messages=True,                # optional but helpful for cleanup
-        manage_emojis_and_stickers=True,     # optional for future features
-        connect=True, speak=True             # optional for future voice features
-    ).value
-)
+# Minimal permission set Zephyra actually uses:
+# View Channel (1024), Send Messages (2048), Add Reactions (64),
+# Manage Messages (8192) -> needed to remove users' reactions after translating,
+# Embed Links (16384), Read Message History (65536),
+# Use External Emojis (262144) -> helpful if you ever use cross-server emojis
+MINIMAL_PERMS = 1024 + 2048 + 64 + 8192 + 16384 + 65536 + 262144  # 355392
+ADMIN_PERMS = 8  # Administrator
 
-REQUIRED = [
-    "View Channels",
-    "Send Messages",
-    "Embed Links",
-    "Add Reactions",
-    "Read Message History",
-    "Use Application Commands",
-]
-OPTIONAL = [
-    "Manage Messages (cleanup)",
-    "Manage Emojis & Stickers (future)",
-    "Connect/Speak (future voice)",
-]
+def build_invite_link(app_id: int, perms: int) -> str:
+    return (
+        f"https://discord.com/api/oauth2/authorize"
+        f"?client_id={app_id}"
+        f"&permissions={perms}"
+        f"&scope=bot%20applications.commands"
+    )
 
-class InviteCommand(commands.Cog):
-    def __init__(self, bot):
+class Invite(commands.Cog):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="invite", description=f"Get an invite link to add {NAME} to a server.")
+    @app_commands.command(name="invite", description="DMs you an invite link to add Zephyra to your server.")
     async def invite(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        bot_id = self.bot.user.id
-        invite_url = (
-            f"https://discord.com/oauth2/authorize?"
-            f"client_id={bot_id}&permissions={PERMISSIONS_INT}&scope=bot%20applications.commands"
-        )
 
-        req = "• " + "\n• ".join(REQUIRED)
-        opt = "• " + "\n• ".join(OPTIONAL)
+        app_id = interaction.client.user.id if interaction.client and interaction.client.user else None
+        if app_id is None:
+            return await interaction.followup.send("❌ Could not resolve application ID.", ephemeral=True)
+
+        url_min = build_invite_link(app_id, MINIMAL_PERMS)
+        url_admin = build_invite_link(app_id, ADMIN_PERMS)
 
         embed = discord.Embed(
-            title=INVITE_TITLE,
+            title=f"{EMOJI_PRIMARY} Invite Zephyra",
+            color=COLOR,
             description=(
-                f"Click the button below to invite **{NAME}** to your server.\n\n"
-                f"**Required permissions**\n{req}\n\n"
-                f"**Optional permissions**\n{opt}"
+                f"Use one of the buttons below to invite **Zephyra**.\n\n"
+                f"{EMOJI_HIGHLIGHT} **Recommended (Minimal)** — just the permissions the bot needs.\n"
+                f"🛡️ **Administrator** — easier for busy setups, full control.\n"
             ),
-            color=COLOR
         )
-        embed.set_footer(text=FOOTER)
+        embed.set_footer(text=footer())
 
         view = discord.ui.View()
-        view.add_item(discord.ui.Button(
-            label=f"Invite {NAME}",
-            url=invite_url,
-            style=discord.ButtonStyle.link
-        ))
+        view.add_item(discord.ui.Button(label="Invite (Recommended)", style=discord.ButtonStyle.link, url=url_min))
+        view.add_item(discord.ui.Button(label="Invite (Admin)", style=discord.ButtonStyle.link, url=url_admin))
 
+        # DM the user with the buttons
         try:
             await interaction.user.send(embed=embed, view=view)
-            await interaction.followup.send("I sent you a DM with the invite link.", ephemeral=True)
-        except discord.Forbidden:
+            await interaction.followup.send("📩 I’ve sent you a DM with invite buttons.", ephemeral=True)
+        except Exception:
             await interaction.followup.send(
-                f"I couldn't DM you. Here’s the link instead:\n{invite_url}",
-                ephemeral=True
+                "❌ I couldn’t DM you (privacy settings). Here are the invite links:",
+                ephemeral=True,
+                view=view
             )
 
-async def setup(bot):
-    await bot.add_cog(InviteCommand(bot))
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Invite(bot))
