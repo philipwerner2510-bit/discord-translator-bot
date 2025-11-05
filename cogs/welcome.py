@@ -8,21 +8,25 @@ def build_guide_embed(guild_name: str) -> discord.Embed:
     e = discord.Embed(
         title=GUIDE_TITLE,
         description=(
-            f"Thank you for inviting **{NAME}**.\n\n"
-            "**Quick setup:**\n"
-            "1) `/channelselection` → choose channels for reactions.\n"
-            "2) `/defaultlang` → set the server’s default target language.\n"
-            "3) Optional: `/aisettings true|false` → enable AI fallback for best quality.\n"
-            "4) Use `/help` for the full command reference.\n"
+            f"Thanks for adding **{NAME}** to **{guild_name}**!\n\n"
+            "**Quick setup (2–3 mins):**\n"
+            "1) `/channelselection` → choose where reactions should trigger translations.\n"
+            "2) `/defaultlang <lang>` → set the server’s default target language.\n"
+            "3) Optional: `/aisettings <true|false>` → enable AI fallback for tricky text & slang.\n\n"
+            "**Tips for members:**\n"
+            "• Use `/setmylang <lang>` to set your own language.\n"
+            "• React to a message in selected channels to get a DM with the translation.\n"
+            "• `/help` shows all commands.\n"
         ),
         color=COLOR
     )
     e.add_field(
-        name="Tips",
+        name="Admin tools",
         value=(
-            "• Users set personal language via `/setmylang`.\n"
-            "• React in selected channels to receive translations.\n"
-            "• `/stats` and `/leaderboard` show activity.\n"
+            "• `/settings` — current configuration\n"
+            "• `/librestatus` — Libre endpoint health\n"
+            "• `/stats` — usage counters\n"
+            "• `/leaderboard` — top translators\n"
         ),
         inline=False
     )
@@ -37,15 +41,17 @@ class Welcome(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     async def guide(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        embed = build_guide_embed(interaction.guild.name if interaction.guild else "your server")
+        guild_name = interaction.guild.name if interaction.guild else "this server"
+        embed = build_guide_embed(guild_name)
         try:
             await interaction.channel.send(embed=embed)
-            await interaction.followup.send("Posted the guide.", ephemeral=True)
+            await interaction.followup.send("Posted the guide in this channel.", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"Could not post here: {e}", ephemeral=True)
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
+        """Post the guide once when Zephyra joins a new server."""
         embed = build_guide_embed(guild.name)
         for ch in guild.text_channels:
             try:
