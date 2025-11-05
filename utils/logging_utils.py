@@ -1,61 +1,36 @@
-import os
-import time
+# utils/logging_utils.py
+import datetime, traceback
 import aiofiles
-import traceback
-import datetime
 import discord
-from utils import database  # <-- FIX: import database
+from utils import database
 
-LOG_PATH = os.getenv("BOT_LOG_PATH", "/mnt/data/bot_errors.log")
-
-_admin_notify_cache = {}  # guild_id → last_notify_ts
-ADMIN_NOTIFY_COOLDOWN = 900  # 15 min
-
+LOG_FILE = "bot_errors.log"
 
 async def log_error(bot, guild_id, message: str, exc: Exception = None, admin_notify=False):
     timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    base = f"[{timestamp}][Guild {guild_id}] {message}"
-
-    stack = ""
+    log_msg = f"[{timestamp}][Guild {guild_id}] {message}"
+    tb = None
     if exc:
-        stack = "".join(traceback.format_exception(exc))[:2000]
-        base += f"\n{stack}"
-
-    print(base)
-
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        log_msg += f"\nTraceback:\n{tb}"
+    print(log_msg)
     try:
-        async with aiofiles.open(LOG_PATH, "a", encoding="utf-8") as f:
-            await f.write(base + "\n")
-    except Exception:
-        pass
+        async with aiofiles.open(LOG_FILE, "a", encoding="utf-8") as f:
+            await f.write(log_msg + "\n")
+    except Exception as file_exc:
+        print(f"[Logging Error] Could not write to log file: {file_exc}")
 
-    if not (bot and admin_notify and guild_id):
-        return
-
-    now = time.time()
-    last = _admin_notify_cache.get(guild_id, 0)
-    if now - last < ADMIN_NOTIFY_COOLDOWN:
-        return
-    _admin_notify_cache[guild_id] = now
-
-    guild = bot.get_guild(guild_id)
-    if not guild:
-        return
-
-    ch_id = await database.get_error_channel(guild_id)
-    ch = guild.get_channel(ch_id) if ch_id else None
-    if not ch:
-        return
-
-    try:
-        emb = discord.Embed(
-            title="⚠️ Bot Error",
-            description=message,
-            timestamp=datetime.datetime.utcnow(),
-            color=0xDE002A
-        )
-        if stack:
-            emb.add_field(name="Details", value=f"```{stack[:1020]}```", inline=False)
-        await ch.send(embed=emb)
-    except Exception:
-        pass
+    if admin_notify and bot and guild_id:
+        try:
+            ch_id = await database.get_error_channel(guild_id)
+            if ch_id:
+                guild = bot.get_guild(guild_id)
+                if guild:
+                    ch = guild.get_channel(ch_id)
+                    if ch:
+                        embed = discord.Embed(title="Error", description=message, color=0xE74C3C)
+                        if tb:
+                            embed.add_field(name="Traceback", value=f"```py\n{tb[:1000]}```", inline=False)
+                        await ch.send(embed=embed)
+        except Exception as e:
+            print(f"[Logging Warning] Could not notify admin channel: {e}")
