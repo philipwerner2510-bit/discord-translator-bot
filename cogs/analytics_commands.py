@@ -3,30 +3,30 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import database
-
-BRAND_COLOR = 0x00E6F6  # Zephyra cyan
+from utils.brand import COLOR, EMOJI_PRIMARY, EMOJI_HIGHLIGHT, EMOJI_ACCENT, footer
 
 class Analytics(commands.Cog):
-    def __init__(self, bot):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="leaderboard", description="Show global translation activity (today & lifetime).")
+    @app_commands.command(name="leaderboard", description="Global translation activity (today & lifetime).")
     async def leaderboard(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # We don’t keep per-user rankings yet (no schema for it).
-        # Show global activity using existing counters.
+        # For now we only show global totals (per-user LB planned later)
         today, total = await database.get_translation_totals()
 
-        embed = discord.Embed(
-            title="Zephyra — Global Activity",
-            color=BRAND_COLOR,
+        e = discord.Embed(
+            title=f"{EMOJI_PRIMARY} Zephyra — Global Activity",
+            color=COLOR,
             description="(Per-user leaderboard coming soon)"
         )
-        embed.add_field(name="Today", value=f"**{today:,}** translations", inline=True)
-        embed.add_field(name="Lifetime", value=f"**{total:,}** translations", inline=True)
+        e.add_field(name="Today", value=f"**{today:,}** translations", inline=True)
+        e.add_field(name="Lifetime", value=f"**{total:,}** translations", inline=True)
+        e.add_field(name="\u200b", value="\u200b", inline=True)
+        e.set_footer(text=footer())
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=e, ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Analytics(bot))
