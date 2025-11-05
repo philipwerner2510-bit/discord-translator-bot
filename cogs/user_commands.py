@@ -1,122 +1,186 @@
 # cogs/user_commands.py
+import os
 import discord
 from discord.ext import commands
 from discord import app_commands
-from utils.brand import NAME, COLOR, HELP_TITLE, FOOTER
-from cogs.translate import SUPPORTED_LANGS, LANG_LOOKUP, _filter_lang_choices
+
+OWNER_ID = int(os.getenv("OWNER_ID", "762267166031609858"))
+BRAND_COLOR = 0x00E6F6  # Zephyra cyan
+
+def is_owner(user: discord.abc.User) -> bool:
+    return user.id == OWNER_ID
 
 def embed_general() -> discord.Embed:
     e = discord.Embed(
-        title=HELP_TITLE,
+        title="Zephyra — Help (General)",
+        color=BRAND_COLOR,
         description=(
-            "**Commands for everyone**\n"
-            "• `/translate <text> <target_lang>` — translate text.\n"
-            "• `/setmylang <lang>` — set your personal target language.\n"
-            "• `/langlist` — show supported languages.\n"
-            "• `/invite` — DM yourself an invite button.\n"
-            "• `/ping` — latency and health.\n"
-            "• `/help` — open this menu.\n"
-        ),
-        color=COLOR
+            "Commands available to everyone.\n"
+            "_Tip: Use Tab/Autocomplete on language fields._"
+        )
     )
-    e.set_footer(text=FOOTER)
+    e.add_field(
+        name="`/translate <text> <target_lang>`",
+        value=(
+            "Translate **text** to a chosen **language code** (e.g. `en`, `de`, `fr`).\n"
+            "• Uses **AI translation only** (no Libre fallback).\n"
+            "• Returns a clean translated message."
+        ),
+        inline=False,
+    )
+    e.add_field(
+        name="`/setmylang <lang>`",
+        value=(
+            "Set your **personal default language** for DM translations triggered by reaction.\n"
+            "• Supports **autocomplete** for codes."
+        ),
+        inline=False,
+    )
+    e.add_field(
+        name="`/ping`",
+        value="Quick latency check.",
+        inline=False,
+    )
+    e.add_field(
+        name="`/guide`",
+        value="Show the quick-start guide for all users.",
+        inline=False,
+    )
+    # optional, if you have /invite live in your build
+    e.add_field(
+        name="`/invite`",
+        value="DMs you an invite link to add Zephyra to another server.",
+        inline=False,
+    )
+    e.set_footer(text="Created by @Polarix1954")
     return e
 
 def embed_admin() -> discord.Embed:
     e = discord.Embed(
-        title="Admin Tools",
-        description=(
-            "**Setup & Control**\n"
-            "• `/channelselection` — select channels for reaction-based translation.\n"
-            "• `/defaultlang <lang>` — set server default language.\n"
-            "• `/aisettings <true|false>` — enable AI fallback.\n"
-            "• `/settings` — show server config.\n"
-            "• `/librestatus` — check Libre endpoint.\n"
-            "• `/stats` — usage & counters.\n"
-            "• `/leaderboard` — top translators.\n"
-            "• `/guide` — post the quick-start guide.\n"
-        ),
-        color=COLOR
+        title="Zephyra — Help (Admin)",
+        color=BRAND_COLOR,
+        description="Admin-only configuration commands."
     )
-    e.set_footer(text=FOOTER)
+    e.add_field(
+        name="`/defaultlang <lang>`",
+        value=(
+            "Set the **server default language** (fallback for users who didn’t set a personal one).\n"
+            "• Supports **autocomplete** for codes."
+        ),
+        inline=False,
+    )
+    e.add_field(
+        name="`/channelselection`",
+        value=(
+            "Select **which channels** Zephyra should watch and react in.\n"
+            "• The bot adds a reaction to messages in these channels. "
+            "Users can click it to receive a DM translation."
+        ),
+        inline=False,
+    )
+    e.add_field(
+        name="`/emote <emoji>`",
+        value=(
+            "Set the **reaction emote** Zephyra uses in watched channels.\n"
+            "• Accepts **Unicode** (e.g. `👍`) **or** a **custom emoji from THIS server** (e.g. `<:name:id>`).\n"
+            "• Validates that custom emoji actually belongs to the current server."
+        ),
+        inline=False,
+    )
+    e.add_field(
+        name="`/seterrorchannel <#channel | none>`",
+        value=(
+            "Set an **error log channel**, or pass `none` to clear."
+        ),
+        inline=False,
+    )
+    e.add_field(
+        name="`/settings`",
+        value="Show current server settings (default lang, emote, error channel, watched channels).",
+        inline=False,
+    )
+    e.set_footer(text="Created by @Polarix1954")
     return e
 
 def embed_owner() -> discord.Embed:
     e = discord.Embed(
-        title="Owner Tools",
-        description=(
-            "**Maintenance**\n"
-            "• `/reload` — hot-reload all cogs.\n"
-            "• `/backup` — DM database backup.\n"
-            "• `/selftest` — full health check.\n"
-        ),
-        color=COLOR
+        title="Zephyra — Help (Owner)",
+        color=BRAND_COLOR,
+        description="Owner-only controls."
     )
-    e.set_footer(text=FOOTER)
+    e.add_field(
+        name="`/stats`",
+        value=(
+            "Show **bot stats**: servers, uptime, **monthly AI tokens** (in/out) & **estimated EUR**, "
+            "and translation totals (today / lifetime)."
+        ),
+        inline=False,
+    )
+    e.set_footer(text="Created by @Polarix1954 • Owner only")
     return e
 
 class HelpView(discord.ui.View):
-    def __init__(self, is_admin: bool, is_owner: bool):
+    def __init__(self, show_admin: bool, show_owner: bool):
         super().__init__(timeout=120)
-        self.add_item(self._btn("General", embed_general(), primary=True))
-        self.add_item(self._btn("Admin",   embed_admin(),   disabled=not is_admin))
-        self.add_item(self._btn("Owner",   embed_owner(),   disabled=not is_owner))
+        self.show_admin = show_admin
+        self.show_owner = show_owner
 
-    def _btn(self, label: str, embed: discord.Embed, primary=False, disabled=False):
-        style = discord.ButtonStyle.primary if primary else discord.ButtonStyle.secondary
-        b = discord.ui.Button(label=label, style=style, disabled=disabled)
-        async def cb(it: discord.Interaction):
-            await it.response.edit_message(embed=embed, view=self)
-        b.callback = cb
-        return b
+        # Always add General
+        self.add_item(self.GeneralButton())
+        if show_admin:
+            self.add_item(self.AdminButton())
+        if show_owner:
+            self.add_item(self.OwnerButton())
 
-# ---------- Autocomplete (must be async) ----------
-async def user_lang_autocomplete(_interaction: discord.Interaction, current: str):
-    return _filter_lang_choices(current)
+    class GeneralButton(discord.ui.Button):
+        def __init__(self):
+            super().__init__(label="General", style=discord.ButtonStyle.primary)
+
+        async def callback(self, interaction: discord.Interaction):
+            await interaction.response.edit_message(embed=embed_general(), view=self.view)
+
+    class AdminButton(discord.ui.Button):
+        def __init__(self):
+            super().__init__(label="Admin", style=discord.ButtonStyle.secondary)
+
+        async def callback(self, interaction: discord.Interaction):
+            view: HelpView = self.view  # type: ignore
+            if not view.show_admin:
+                return await interaction.response.send_message("You don't have permission to view Admin help.", ephemeral=True)
+            await interaction.response.edit_message(embed=embed_admin(), view=view)
+
+    class OwnerButton(discord.ui.Button):
+        def __init__(self):
+            super().__init__(label="Owner", style=discord.ButtonStyle.secondary)
+
+        async def callback(self, interaction: discord.Interaction):
+            view: HelpView = self.view  # type: ignore
+            if not view.show_owner:
+                return await interaction.response.send_message("Owner only.", ephemeral=True)
+            await interaction.response.edit_message(embed=embed_owner(), view=view)
 
 class UserCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="help", description=f"Show {NAME}'s help menu.")
+    # /help
+    @app_commands.command(name="help", description="Show Zephyra help.")
     async def help(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        is_admin = bool(interaction.guild and interaction.user.guild_permissions.administrator)
-        is_owner = (interaction.user.id == 762267166031609858)
-        await interaction.followup.send(embed=embed_general(), view=HelpView(is_admin, is_owner), ephemeral=True)
+        user = interaction.user
+        is_admin = interaction.guild and user.guild_permissions.administrator
+        show_owner = is_owner(user)
+        v = HelpView(show_admin=bool(is_admin or show_owner), show_owner=show_owner)
+        await interaction.followup.send(embed=embed_general(), view=v, ephemeral=True)
 
-    @app_commands.command(name="ping", description="Check latency and health.")
+    # /ping (everyone)
+    @app_commands.command(name="ping", description="Check bot latency.")
     async def ping(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        ws = round(self.bot.latency * 1000)
-        await interaction.followup.send(f"Pong. WebSocket latency: **{ws}ms**", ephemeral=True)
+        latency_ms = round(self.bot.latency * 1000)
+        await interaction.followup.send(f"🏓 Pong! `{latency_ms} ms`", ephemeral=True)
 
-    @app_commands.autocomplete(lang=user_lang_autocomplete)
-    @app_commands.command(name="setmylang", description="Set your personal translation language.")
-    async def setmylang(self, interaction: discord.Interaction, lang: str):
-        await interaction.response.defer(ephemeral=True)
-        code = lang.lower()
-        if code not in SUPPORTED_LANGS:
-            return await interaction.followup.send("❌ Unsupported language. Please use the suggestions.", ephemeral=True)
-        from utils import database
-        await database.set_user_lang(interaction.user.id, code)
-        flag, name = LANG_LOOKUP.get(code, ("🏳️", code))
-        await interaction.followup.send(f"Your language is now **{name} ({code}) {flag}**.", ephemeral=True)
-
-    @app_commands.command(name="langlist", description="Show supported languages.")
-    async def langlist(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        rows, line = [], []
-        for code in sorted(LANG_LOOKUP.keys()):
-            flag, name = LANG_LOOKUP[code]
-            line.append(f"{flag} `{code}` {name}")
-            if len(line) == 3:
-                rows.append("   |   ".join(line)); line = []
-        if line:
-            rows.append("   |   ".join(line))
-        embed = discord.Embed(title=f"{NAME} Languages", description="\n".join(rows), color=COLOR)
-        embed.set_footer(text=FOOTER)
-        await interaction.followup.send(embed=embed, ephemeral=True)
+    # NOTE: /guide exists in another cog (welcome/guide). We keep /help clean here.
 
 async def setup(bot):
     await bot.add_cog(UserCommands(bot))
