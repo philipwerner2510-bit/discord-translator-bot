@@ -7,7 +7,7 @@ from discord.ext import commands
 from utils.brand import COLOR as BOT_COLOR, PRESENCE_TEMPLATE, NAME as BOT_NAME
 from utils import database
 
-PRESENCE_INTERVAL = 300  # seconds
+PRESENCE_INTERVAL = 180  # seconds (rotate every 3 min)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -39,23 +39,28 @@ EXTENSIONS = [
 ]
 
 async def presence_loop():
-    """Update presence every PRESENCE_INTERVAL seconds."""
+    """Rotate presence every PRESENCE_INTERVAL seconds."""
     await bot.wait_until_ready()
+    i = 0
     while not bot.is_closed():
         try:
             guild_count = len(bot.guilds)
             total_trans = getattr(bot, "total_translations", 0)
-            activity = discord.Game(
-                name=PRESENCE_TEMPLATE.format(servers=guild_count, translations=total_trans)
-            )
+            variants = [
+                f"{guild_count} servers • {total_trans} translations today",
+                "Try /help",
+                "DM /invite to add me",
+            ]
+            activity = discord.Game(name=variants[i % len(variants)])
             await bot.change_presence(activity=activity)
+            i += 1
         except Exception as e:
             print(f"⚠️ Presence update failed: {e}")
         await asyncio.sleep(PRESENCE_INTERVAL)
 
 @bot.event
 async def on_ready():
-    # sync global commands (per-guild sync is not needed unless you target specific guilds)
+    # sync global commands
     try:
         await bot.tree.sync()
         print("🌍 Global slash commands synced")
