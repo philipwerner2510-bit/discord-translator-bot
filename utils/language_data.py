@@ -1,0 +1,61 @@
+# Country flag + proper ISO 639-1 code + common English name
+SUPPORTED_LANGUAGES = [
+    {"code": "en", "name": "English", "flag": "🇬🇧"},
+    {"code": "de", "name": "German", "flag": "🇩🇪"},
+    {"code": "fr", "name": "French", "flag": "🇫🇷"},
+    {"code": "es", "name": "Spanish", "flag": "🇪🇸"},
+    {"code": "pt", "name": "Portuguese", "flag": "🇵🇹"},
+    {"code": "it", "name": "Italian", "flag": "🇮🇹"},
+    {"code": "ru", "name": "Russian", "flag": "🇷🇺"},
+    {"code": "ja", "name": "Japanese", "flag": "🇯🇵"},
+    {"code": "zh", "name": "Chinese (Simplified)", "flag": "🇨🇳"},
+    {"code": "ko", "name": "Korean", "flag": "🇰🇷"},
+    {"code": "tr", "name": "Turkish", "flag": "🇹🇷"},
+    {"code": "pl", "name": "Polish", "flag": "🇵🇱"},
+    {"code": "sv", "name": "Swedish", "flag": "🇸🇪"},
+    {"code": "ar", "name": "Arabic", "flag": "🇸🇦"},
+    {"code": "hi", "name": "Hindi", "flag": "🇮🇳"},
+    {"code": "ro", "name": "Romanian", "flag": "🇷🇴"},
+    {"code": "nl", "name": "Dutch", "flag": "🇳🇱"},
+    {"code": "fi", "name": "Finnish", "flag": "🇫🇮"},
+    {"code": "el", "name": "Greek", "flag": "🇬🇷"},
+    {"code": "cs", "name": "Czech", "flag": "🇨🇿"},
+    {"code": "da", "name": "Danish", "flag": "🇩🇰"},
+    {"code": "no", "name": "Norwegian", "flag": "🇳🇴"},
+    {"code": "hu", "name": "Hungarian", "flag": "🇭🇺"},
+    {"code": "uk", "name": "Ukrainian", "flag": "🇺🇦"},
+    {"code": "he", "name": "Hebrew", "flag": "🇮🇱"},
+    {"code": "id", "name": "Indonesian", "flag": "🇮🇩"},
+    {"code": "vi", "name": "Vietnamese", "flag": "🇻🇳"},
+    {"code": "th", "name": "Thai", "flag": "🇹🇭"},
+    {"code": "fa", "name": "Persian", "flag": "🇮🇷"},
+    {"code": "bn", "name": "Bengali", "flag": "🇧🇩"},
+    {"code": "ta", "name": "Tamil", "flag": "🇮🇳"},
+    {"code": "mr", "name": "Marathi", "flag": "🇮🇳"},
+    {"code": "gu", "name": "Gujarati", "flag": "🇮🇳"},
+    {"code": "pa", "name": "Punjabi", "flag": "🇮🇳"},
+    {"code": "kn", "name": "Kannada", "flag": "🇮🇳"},
+    {"code": "ml", "name": "Malayalam", "flag": "🇮🇳"},
+    {"code": "te", "name": "Telugu", "flag": "🇮🇳"},
+    {"code": "ur", "name": "Urdu", "flag": "🇵🇰"},
+    {"code": "sr", "name": "Serbian", "flag": "🇷🇸"},
+    {"code": "hr", "name": "Croatian", "flag": "🇭🇷"},
+    {"code": "bg", "name": "Bulgarian", "flag": "🇧🇬"},
+    {"code": "sk", "name": "Slovak", "flag": "🇸🇰"},
+    {"code": "sl", "name": "Slovenian", "flag": "🇸🇮"},
+    {"code": "et", "name": "Estonian", "flag": "🇪🇪"},
+    {"code": "lv", "name": "Latvian", "flag": "🇱🇻"},
+    {"code": "lt", "name": "Lithuanian", "flag": "🇱🇹"},
+    {"code": "ms", "name": "Malay", "flag": "🇲🇾"},
+    {"code": "sw", "name": "Swahili", "flag": "🇰🇪"},
+    {"code": "am", "name": "Amharic", "flag": "🇪🇹"},
+    {"code": "yo", "name": "Yoruba", "flag": "🇳🇬"},
+]
+
+def label(code: str) -> str:
+    lang = next((x for x in SUPPORTED_LANGUAGES if x["code"] == code), None)
+    if not lang: return f"🏳️ {code} — Unknown"
+    return f'{lang["flag"]} {lang["name"]} ({lang["code"]})'
+
+def codes():
+    return [x["code"] for x in SUPPORTED_LANGUAGES]
