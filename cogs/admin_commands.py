@@ -13,7 +13,7 @@ SUPPORTED_LANGS = [
 
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
 
-# --- FIX: autocomplete helper must be async
+# async autocomplete helper
 async def ac_lang(interaction: discord.Interaction, current: str):
     current = (current or "").lower()
     items = [code for code in SUPPORTED_LANGS if current in code]
@@ -26,7 +26,7 @@ class AdminCommands(commands.Cog):
     @app_commands.guild_only()
     @app_commands.command(name="defaultlang", description="Set the default translation language for this server.")
     @app_commands.describe(lang="Language code (e.g., en, de, fr)")
-    @app_commands.autocomplete(lang=ac_lang)  # <-- FIXED
+    @app_commands.autocomplete(lang=ac_lang)
     async def defaultlang(self, interaction: discord.Interaction, lang: str):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Admins only.", ephemeral=True)
