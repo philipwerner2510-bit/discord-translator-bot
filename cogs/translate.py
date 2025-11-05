@@ -1,6 +1,7 @@
 # cogs/translate.py
 import re
 import asyncio
+import json
 from datetime import datetime
 import os
 import discord
@@ -60,7 +61,7 @@ class Translate(commands.Cog):
             await interaction.followup.send(f"❌ Unsupported language code `{target_lang}`.", ephemeral=True)
             return
         try:
-            translated, src, usage = await self.ai_translate(text, target_lang)
+            translated, detected, usage = await self.ai_translate(text, target_lang)
             await database.add_translation_stat(
                 interaction.guild_id, interaction.user.id, used_ai=True,
                 tokens_in=usage.get("input",0), tokens_out=usage.get("output",0)
@@ -68,7 +69,7 @@ class Translate(commands.Cog):
             embed = discord.Embed(description=translated, color=0x00E6F6)
             embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
             timestamp = datetime.utcnow().strftime("%H:%M UTC")
-            embed.set_footer(text=f"Translated at {timestamp} • to {target_lang} • detected {src}")
+            embed.set_footer(text=f"Translated at {timestamp} • to {target_lang} • detected {detected}")
             await interaction.followup.send(embed=embed, ephemeral=False)
         except Exception as e:
             await interaction.followup.send(f"❌ Translation failed: {e}", ephemeral=True)
@@ -126,7 +127,7 @@ class Translate(commands.Cog):
 
         try:
             src_text = msg.content or ""
-            translated, src, usage = await self.ai_translate(src_text, user_lang)
+            translated, detected, usage = await self.ai_translate(src_text, user_lang)
             await database.add_translation_stat(
                 gid, user.id, used_ai=True,
                 tokens_in=usage.get("input",0), tokens_out=usage.get("output",0)
@@ -135,7 +136,7 @@ class Translate(commands.Cog):
             embed = discord.Embed(description=translated, color=0x00E6F6)
             embed.set_author(name=msg.author.display_name, icon_url=msg.author.display_avatar.url)
             ts = msg.created_at.strftime("%H:%M UTC")
-            embed.set_footer(text=f"{ts} • to {user_lang} • detected {src}")
+            embed.set_footer(text=f"{ts} • to {user_lang} • detected {detected}")
             embed.description += f"\n[Original message](https://discord.com/channels/{msg.guild.id}/{msg.channel.id}/{msg.id})"
             await user.send(embed=embed)
             try:
@@ -149,25 +150,31 @@ class Translate(commands.Cog):
         await asyncio.sleep(delay)
         self.sent.discard(key)
 
-    # AI translate helper
+    # AI translate helper — returns (translated_text, detected_lang_code, usage_dict)
     async def ai_translate(self, text: str, target_lang: str):
-        prompt_system = (
-            "You are a concise translator. "
-            "Detect the source language and translate the user's text to the requested target language. "
-            "Return ONLY the translated text."
+        system = (
+            "You are a precise translator. "
+            "Detect the source language (ISO 639-1 code) and translate the user's text to the requested target language."
         )
-        prompt_user = f"Target language: {target_lang}\n\nText:\n{text}"
+        # Ask for strict JSON so we can parse detected language.
+        user = (
+            "Return ONLY strict JSON with keys: translated, detected.\n"
+            "• detected must be the ISO 639-1 code of the source language (e.g., 'en','de','es').\n"
+            "• translated must contain ONLY the translated text (no notes).\n\n"
+            f"Target language: {target_lang}\n"
+            f"Text:\n{text}"
+        )
 
         resp = self.ai.chat.completions.create(
             model=AI_MODEL,
             messages=[
-                {"role": "system", "content": prompt_system},
-                {"role": "user", "content": prompt_user}
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user}
             ],
             temperature=0,
         )
 
-        out = resp.choices[0].message.content.strip()
+        raw = resp.choices[0].message.content.strip()
         usage = {"input": 0, "output": 0}
         try:
             u = resp.usage
@@ -176,8 +183,30 @@ class Translate(commands.Cog):
         except Exception:
             pass
 
-        detected = "unknown"
-        return out, detected, usage
+        # Robust JSON extraction (in case the model wraps it)
+        parsed = None
+        try:
+            # try direct
+            parsed = json.loads(raw)
+        except Exception:
+            # try to extract first {...} block
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    parsed = json.loads(raw[start:end+1])
+                except Exception:
+                    parsed = None
+
+        if isinstance(parsed, dict):
+            translated = str(parsed.get("translated", "")).strip()
+            detected = str(parsed.get("detected", "unknown")).strip().lower()
+            if not detected or len(detected) > 5:
+                detected = "unknown"
+            return translated, detected, usage
+
+        # Fallback: if parsing failed, return raw text and unknown
+        return raw, "unknown", usage
 
 async def setup(bot):
     await bot.add_cog(Translate(bot))
