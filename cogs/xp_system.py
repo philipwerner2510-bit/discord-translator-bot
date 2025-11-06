@@ -90,7 +90,14 @@ class XPCog(commands.Cog):
         start_rank = offset + 1
         for i, (user_id, xp, msgs, trans, vsec) in enumerate(rows, start=start_rank):
             user = interaction.guild.get_member(user_id) or self.bot.get_user(user_id)
-            name = user.mention if isinstance(user, discord.Member) else (user.mention if user else f"<@{user_id}>")
+            # Prefer mention if member is present; otherwise fallback to <@id>
+            if isinstance(user, discord.Member):
+                name = user.mention
+            elif user is not None:
+                name = f"<@{user.id}>"
+            else:
+                name = f"<@{user_id}>"
+
             lines.append(f"**{i}.** {name} — **{xp} XP** · {msgs} msgs · {trans} trans")
 
         e = discord.Embed(
