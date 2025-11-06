@@ -7,10 +7,10 @@ from openai import OpenAI
 
 from utils.brand import COLOR, footer, Z_CONFUSED, Z_SAD, FOOTER_TRANSLATED
 from utils import database
-from utils.language_data import SUPPORTED_LANGUAGES, label, codes
+from utils.language_data import SUPPORTED_LANGUAGES, label
 from utils.logging_utils import log_error
 
-# optional lightweight in-memory cache (shipped in utils/cache.py)
+# optional in-memory cache
 try:
     from utils.cache import TranslationCache
 except Exception:
@@ -19,7 +19,7 @@ except Exception:
 # ===== Config =====
 AI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-TRANSLATION_XP = 10  # XP per successful translation (manual or reaction)
+TRANSLATION_XP = 9  # balanced vs messages
 
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
 TEXT_EXTS = {".txt", ".md", ".csv", ".log"}
@@ -39,9 +39,11 @@ def _same(a: str, b: str) -> bool:
     return False
 
 def _lang_list():
+    from utils.language_data import SUPPORTED_LANGUAGES
     return [l["code"] for l in SUPPORTED_LANGUAGES]
 
 async def ac_lang(interaction, current: str):
+    from utils.language_data import SUPPORTED_LANGUAGES, label
     cur = (current or "").lower()
     choices = []
     for l in SUPPORTED_LANGUAGES:
@@ -58,18 +60,16 @@ class Translate(commands.Cog):
         if not OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY not set.")
         self.ai = OpenAI(api_key=OPENAI_API_KEY)
-        # guard set: (message_id, user_id) to prevent double-DM spam per message per user
-        self.sent = set()
+        self.sent = set()  # (message_id, user_id)
         self.cache = TranslationCache(ttl=300) if TranslationCache else None
 
-    # ========== /translate (manual) ==========
+    # ===== /translate (manual) =====
     @app_commands.guild_only()
     @app_commands.command(name="translate", description="Translate specific text with AI.")
     @app_commands.describe(text="Text to translate", target_lang="Target language (code)")
     @app_commands.autocomplete(target_lang=ac_lang)
     async def translate(self, interaction: discord.Interaction, text: str, target_lang: str):
         await interaction.response.defer(ephemeral=True)
-
         target_lang = (target_lang or "").lower()
         if target_lang not in _lang_list():
             e = discord.Embed(description=f"{Z_CONFUSED} Unsupported language code `{target_lang}`.", color=COLOR)
@@ -88,12 +88,14 @@ class Translate(commands.Cog):
                 embed.set_footer(text=FOOTER_TRANSLATED)
                 await interaction.channel.send(embed=embed)
 
-                # award XP for manual translation
+                # XP & immediate role check
                 try:
                     await database.add_activity(interaction.guild.id, interaction.user.id,
                                                 xp=TRANSLATION_XP, translations=1)
                 except Exception:
                     pass
+                # notify xp_system to update roles
+                self.bot.dispatch("xp_gain", interaction.guild.id, interaction.user.id)
 
             except Exception as e:
                 await log_error(self.bot, interaction.guild.id if interaction.guild else 0,
@@ -102,7 +104,7 @@ class Translate(commands.Cog):
                 err.set_footer(text=footer())
                 await interaction.followup.send(embed=err, ephemeral=True)
 
-    # ========== Auto-add reaction in configured channels ==========
+    # ===== Auto-add reaction in configured channels =====
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -126,8 +128,8 @@ class Translate(commands.Cog):
             else:
                 print(f"[{gid}] Could not add unicode emote {emote} in #{message.channel.id}")
 
-    # ========== Reaction → DM translate ==========
-    @commands.Cog.listener())
+    # ===== Reaction → DM translate =====
+    @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
         if user.bot or not reaction.message.guild:
             return
@@ -135,36 +137,30 @@ class Translate(commands.Cog):
         msg = reaction.message
         gid = msg.guild.id
 
-        # Only in configured channels
         allowed = await database.get_translation_channels(gid)
         if not allowed or msg.channel.id not in allowed:
             return
 
-        # Must match configured emote
         configured = normalize_emote_input(await database.get_bot_emote(gid) or "🔃")
         reacted = reaction_to_str(reaction.emoji)
         if not _same(configured, reacted):
             return
 
-        # Prevent duplicate DMs for same user+message
         key = (msg.id, user.id)
         if key in self.sent:
             return
-        self.sent.add(key)
-        asyncio.create_task(self._clear(key))
+        self.sent.add(key); asyncio.create_task(self._clear(key))
 
-        # Target language (user → server → en)
         target = (await database.get_user_lang(user.id)) or (await database.get_server_lang(gid)) or "en"
         if target not in _lang_list():
             target = "en"
 
-        # Send DM "loading"
         loading = discord.Embed(description="Translating…", color=COLOR)
         loading.set_footer(text=footer())
         try:
             dm_msg = await user.send(embed=loading)
         except Exception:
-            # Can't DM — keep bot reaction for others, remove ONLY user's reaction to prevent loops
+            # cannot DM: remove only user's reaction; keep bot's
             try:
                 await reaction.remove(user)
             except Exception:
@@ -172,7 +168,6 @@ class Translate(commands.Cog):
             return
 
         try:
-            # Gather translatable content: text + embed descriptions + small text attachments
             base_text = msg.content or ""
             embed_parts = [emb.description for emb in msg.embeds if getattr(emb, "description", None)]
             attach_parts = []
@@ -206,13 +201,14 @@ class Translate(commands.Cog):
 
             await dm_msg.edit(embed=embed, view=view)
 
-            # award XP for reaction-based translation
+            # XP & immediate role check
             try:
                 await database.add_activity(gid, user.id, xp=TRANSLATION_XP, translations=1)
             except Exception:
                 pass
+            self.bot.dispatch("xp_gain", gid, user.id)
 
-            # Cleanup: remove ONLY the user's reaction so others can still click
+            # remove only the user's click, leave the bot reaction available for others
             try:
                 await reaction.remove(user)
             except Exception:
@@ -227,7 +223,7 @@ class Translate(commands.Cog):
             except Exception:
                 pass
 
-    # ========== helpers ==========
+    # ===== helpers =====
     async def _clear(self, key, delay: int = 300):
         await asyncio.sleep(delay)
         self.sent.discard(key)
