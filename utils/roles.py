@@ -1,59 +1,48 @@
 # utils/roles.py
-# Role ladder + color utilities (purple → Zephyra cyan)
+# Role ladder generator and gradient utilities (purple -> Zephyra cyan)
+from typing import List, Dict
 
-from __future__ import annotations
-from typing import List, Tuple
+# Start: purple, End: Zephyra cyan
+START = 0x8A2BE2  # purple-ish
+END   = 0x00E6F6  # Zephyra primary
 
-# Start/end of the gradient (RGB ints)
-PURPLE_START = 0x7A2CF0  # rich discord-ish purple
-CYAN_END     = 0x00E6F6  # Zephyra storm-cyan
-
-def _hex_to_rgb(c: int) -> Tuple[int, int, int]:
-    return (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF
-
-def _rgb_to_hex(r: int, g: int, b: int) -> int:
-    return (r << 16) | (g << 8) | b
-
-def gradient_color(start_hex: int, end_hex: int, t: float) -> int:
-    """Linear RGB gradient. t in [0,1]."""
-    sr, sg, sb = _hex_to_rgb(start_hex)
-    er, eg, eb = _hex_to_rgb(end_hex)
-    r = round(sr + (er - sr) * t)
-    g = round(sg + (eg - sg) * t)
-    b = round(sb + (eb - sb) * t)
-    return _rgb_to_hex(max(0, min(255, r)),
-                       max(0, min(255, g)),
-                       max(0, min(255, b)))
-
-# 10 bands: 1–10, 11–20, …, 91–100
-ROLE_NAMES = [
-    "Newcomer",      # 1–10
-    "Member",        # 11–20
-    "Regular",       # 21–30
-    "Contributor",   # 31–40
-    "Active",        # 41–50
-    "Veteran",       # 51–60
-    "Elite",         # 61–70
-    "Champion",      # 71–80
-    "Mythic",        # 81–90
-    "Legend",        # 91–100
+BANDS = [
+    (1, 10,  "Rookie I"),
+    (11, 20, "Rookie II"),
+    (21, 30, "Challenger"),
+    (31, 40, "Adept"),
+    (41, 50, "Expert"),
+    (51, 60, "Elite"),
+    (61, 70, "Master"),
+    (71, 80, "Grandmaster"),
+    (81, 90, "Legend"),
+    (91, 100,"Mythic"),
 ]
 
-def role_ladder() -> List[dict]:
+def _lerp(a: int, b: int, t: float) -> int:
+    return int(a + (b - a) * t)
+
+def gradient_color(index: int, total: int) -> int:
+    """Inclusive index (0..total-1)."""
+    if total <= 1:
+        return END
+    t = index / (total - 1)
+    sr, sg, sb = (START >> 16) & 0xFF, (START >> 8) & 0xFF, START & 0xFF
+    er, eg, eb = (END >> 16) & 0xFF, (END >> 8) & 0xFF, END & 0xFF
+    r = _lerp(sr, er, t)
+    g = _lerp(sg, eg, t)
+    b = _lerp(sb, eb, t)
+    return (r << 16) | (g << 8) | b
+
+def role_ladder() -> List[Dict]:
     """
-    Returns 10 role specs:
-      { "min": int, "max": int, "name": str, "color": int }
-    Colors are evenly spaced from PURPLE_START → CYAN_END.
+    Returns an array of 10 role specs with name + color, fading purple->cyan.
     """
-    out: List[dict] = []
-    total = len(ROLE_NAMES)
-    for i, name in enumerate(ROLE_NAMES):
-        t = i / max(1, total - 1)
-        col = gradient_color(PURPLE_START, CYAN_END, t)
-        out.append({
-            "min": i * 10 + 1,
-            "max": (i + 1) * 10,
+    total = len(BANDS)
+    roles = []
+    for i, (_, _, name) in enumerate(BANDS):
+        roles.append({
             "name": name,
-            "color": col
+            "color": gradient_color(i, total)
         })
-    return out
+    return roles
