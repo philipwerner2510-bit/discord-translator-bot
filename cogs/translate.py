@@ -4,9 +4,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from openai import OpenAI
-from utils.brand import COLOR, footer, Z_CONFUSED, Z_SAD
+from utils.brand import COLOR, footer, Z_CONFUSED, Z_SAD, FOOTER_TRANSLATED
 from utils import database
 from utils.language_data import SUPPORTED_LANGUAGES, label, codes
+from utils.logging_utils import log_error
 
 # optional lightweight in-memory cache (shipped in utils/cache.py)
 try:
@@ -17,6 +18,7 @@ except Exception:
 AI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
+TEXT_EXTS = {".txt", ".md", ".csv", ".log"}
 
 def normalize_emote_input(s: str) -> str:
     return (s or "").strip()
@@ -69,32 +71,29 @@ class Translate(commands.Cog):
             e.set_footer(text=footer())
             return await interaction.followup.send(embed=e, ephemeral=True)
 
-        thinking = discord.Embed(description="Translating…", color=COLOR)
-        thinking.set_footer(text=footer())
-        await interaction.followup.send(embed=thinking, ephemeral=True)
-
-        try:
-            translated, detected = await self.ai_translate(text, target_lang)
-            # Post result publicly in channel
-            embed = discord.Embed(
-                title=f"{label(detected)} → {label(target_lang)}",
-                description=translated,
-                color=COLOR
-            )
-            embed.set_footer(text=footer())
-            await interaction.channel.send(embed=embed)
-
-            # stats
+        async with interaction.channel.typing():
             try:
-                await database.add_translation_stat(interaction.guild.id, interaction.user.id)
-            except Exception:
-                pass
-        except Exception as e:
-            err = discord.Embed(description=f"{Z_SAD} Translation failed: `{e}`", color=COLOR)
-            err.set_footer(text=footer())
-            await interaction.followup.send(embed=err, ephemeral=True)
+                translated, detected = await self.ai_translate(text, target_lang)
+                embed = discord.Embed(
+                    title=f"{label(detected)} → {label(target_lang)}",
+                    description=translated,
+                    color=COLOR
+                )
+                embed.set_footer(text=FOOTER_TRANSLATED)
+                await interaction.channel.send(embed=embed)
 
-    # React to translate
+                try:
+                    await database.add_translation_stat(interaction.guild.id, interaction.user.id)
+                except Exception:
+                    pass
+            except Exception as e:
+                await log_error(self.bot, interaction.guild.id if interaction.guild else 0,
+                                f"Manual /translate failed: {e}", e, admin_notify=True)
+                err = discord.Embed(description=f"{Z_SAD} Translation failed: `{e}`", color=COLOR)
+                err.set_footer(text=footer())
+                await interaction.followup.send(embed=err, ephemeral=True)
+
+    # React to translate (adds reaction automatically)
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -138,27 +137,49 @@ class Translate(commands.Cog):
         self.sent.add(key)
         asyncio.create_task(self._clear(key))
 
-        # user lang or server default
+        # Decide target language
         target = (await database.get_user_lang(user.id)) or (await database.get_server_lang(gid)) or "en"
         if target not in _lang_list():
             target = "en"
 
-        # DM loading
+        # DM loading + typing indicator
         loading = discord.Embed(description="Translating…", color=COLOR)
         loading.set_footer(text=footer())
         try:
             dm_msg = await user.send(embed=loading)
         except Exception:
-            return  # can't DM user
+            # Can't DM—quietly ignore and remove user reaction to prevent loops
+            try:
+                await reaction.remove(user)
+            except Exception:
+                pass
+            return
 
         try:
-            translated, detected = await self.ai_translate(msg.content or "", target)
+            # Collect content: raw text + simple embed descriptions + text attachments
+            base_text = msg.content or ""
+            embed_parts = [emb.description for emb in msg.embeds if getattr(emb, "description", None)]
+            attach_parts = []
+            for a in msg.attachments:
+                name = (a.filename or "").lower()
+                if any(name.endswith(ext) for ext in TEXT_EXTS) and a.size <= 2_000_000:  # 2 MB guard
+                    try:
+                        data = await a.read()
+                        attach_parts.append(data.decode("utf-8", errors="replace"))
+                    except Exception:
+                        pass
+
+            full_text = "\n\n".join(x for x in [base_text, *embed_parts, *attach_parts] if x)
+
+            async with user.typing():
+                translated, detected = await self.ai_translate(full_text, target)
+
             embed = discord.Embed(
                 title=f"{label(detected)} → {label(target)}",
-                description=translated,
+                description=translated or "(no text content to translate)",
                 color=COLOR
             )
-            embed.set_footer(text=footer())
+            embed.set_footer(text=FOOTER_TRANSLATED)
 
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
@@ -175,11 +196,31 @@ class Translate(commands.Cog):
             except Exception:
                 pass
 
+            # Cleanup: remove both the user's reaction and the bot's own reaction to keep threads clean
             try:
                 await reaction.remove(user)
             except Exception:
                 pass
+            try:
+                # Remove bot's own reaction (if present)
+                async for react in msg.reactions:
+                    pass  # placeholder to satisfy syntax highlighter
+            except Exception:
+                pass
+            # Better deterministic cleanup: remove the specific emoji the user clicked, from the bot as well
+            try:
+                # Find the matching reaction object
+                for r in msg.reactions:
+                    if _same(reaction_to_str(r.emoji), configured):
+                        async for u in r.users():
+                            if u.id == self.bot.user.id:
+                                await r.remove(u)
+                        break
+            except Exception:
+                pass
+
         except Exception as e:
+            await log_error(self.bot, gid, f"Reaction-translate failed: {e}", e, admin_notify=True)
             err = discord.Embed(description=f"{Z_SAD} Translation failed: `{e}`", color=COLOR)
             err.set_footer(text=footer())
             try:
@@ -196,7 +237,7 @@ class Translate(commands.Cog):
         if self.cache:
             hit = await self.cache.get(text, target_lang)
             if hit is not None:
-                return hit, "unknown"  # keep detection unknown on cached returns
+                return hit, "unknown"
 
         system = "You are a precise translator. Detect the source language (ISO 639-1) and translate to the requested target."
         user = (
