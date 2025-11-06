@@ -48,9 +48,21 @@ EXTS = [
     "cogs.context_menu",
 ]
 
+_synced_once = False  # one-time global sync guard
+
 @bot.event
 async def on_ready():
+    global _synced_once
     log.info("✅ Logged in as %s (%s) — %s", bot.user, bot.user.id, NAME)
+    # One-time global sync so new/changed commands appear even if /ops sync isn't available yet
+    if not _synced_once:
+        try:
+            synced = await bot.tree.sync()
+            log.info("🪄 Slash command sync complete. %d commands registered.", len(synced))
+        except Exception as e:
+            log.error("❌ Slash command sync failed: %r", e)
+        else:
+            _synced_once = True
 
 async def load_extensions():
     for ext in EXTS:
@@ -135,7 +147,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
     except SystemExit as e:
-        # Prevent silent 0-exit loop
         logging.getLogger("zephyra.boot").error("SystemExit(%s) intercepted; keeping process alive.", e.code)
         try:
             asyncio.run(_stay_alive())
