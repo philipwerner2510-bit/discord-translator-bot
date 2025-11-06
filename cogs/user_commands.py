@@ -35,7 +35,6 @@ class HelpTabs(discord.ui.View):
                 "• `/invite` — get invite buttons in DM\n"
                 "• `/translate <text> <target>` — translate manually\n"
                 "• `/setmylang <code>` — set your personal language\n"
-                "• `/langlist` — show supported languages\n"
                 "• `/leaderboard` — top translators in this server\n"
                 "• `/ping` — latency test\n"
             )
@@ -56,8 +55,10 @@ class HelpTabs(discord.ui.View):
                 "• `/emote <emoji>` — set bot's reaction emote\n"
                 "• `/seterrorchannel <#channel|id|none>` — error logs\n"
                 "• `/settings` — show current server settings\n"
-                "• `/guide` — post the onboarding guide\n"
-                "• `/ops ping|sync|reload|selftest` — diagnostics\n"
+                "• `/guide` — post the onboarding guide (admin-only)\n"
+                "• `/langlist` — post supported languages (admin-only)\n"
+                "• `/ops ping|sync|reload|selftest` — diagnostics (admin-only)\n"
+                "• `/owner stats|guilds` — owner-only\n"
             )
         )
         e.set_footer(text=footer())
@@ -92,9 +93,11 @@ class UserCommands(commands.Cog):
         e.set_footer(text=footer())
         await interaction.response.send_message(embed=e, view=HelpTabs(is_admin, is_owner), ephemeral=True)
 
+    # ADMIN-ONLY
     @app_commands.command(name="guide", description="Post an onboarding guide for your members.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def guide(self, interaction: discord.Interaction):
-        """Posts a short guide explaining how translation works."""
         await interaction.response.defer()
         desc = (
             "**How Zephyra works**\n\n"
@@ -124,7 +127,10 @@ class UserCommands(commands.Cog):
         e.set_footer(text=footer())
         await interaction.followup.send(embed=e, ephemeral=True)
 
+    # ADMIN-ONLY
     @app_commands.command(name="langlist", description="Show all supported languages.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def langlist(self, interaction: discord.Interaction):
         chunks, cur = [], []
         for i, l in enumerate(SUPPORTED_LANGUAGES, start=1):
