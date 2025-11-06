@@ -1,6 +1,9 @@
-# cogs/xp_system.py (imports)
-from utils.roles import role_ladder, best_role_for_level
+import discord
+from discord.ext import commands
+from discord import app_commands
 
+from utils.brand import COLOR, footer_text, NAME, Z_NUM_1, Z_NUM_2, Z_NUM_3
+from utils import database
 # inside the cog class:
 
 async def sync_level_role(self, member: discord.Member, level: int):
