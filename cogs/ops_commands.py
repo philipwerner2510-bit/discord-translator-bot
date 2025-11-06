@@ -7,24 +7,25 @@ from discord import app_commands
 from utils.brand import COLOR, footer_text, NAME
 
 
-# -------- owner-only predicate (no bot reference needed) --------
-def _is_owner_interaction(interaction: discord.Interaction) -> bool:
-    owner_ids = set()
+def owner_only():
+    """Inline owner-only guard (no external module)."""
+    def predicate(interaction: discord.Interaction) -> bool:
+        bot = interaction.client
 
-    # Prefer IDs attached to the running client (supports multiple owners)
-    if getattr(interaction.client, "owner_ids", None):
-        owner_ids |= set(interaction.client.owner_ids)
-    if getattr(interaction.client, "owner_id", None):
-        owner_ids.add(interaction.client.owner_id)
+        owner_ids = set()
+        if getattr(bot, "owner_id", None):
+            owner_ids.add(bot.owner_id)
+        if getattr(bot, "owner_ids", None):
+            owner_ids |= set(bot.owner_ids)
 
-    # Also allow OWNER_IDS from env: "123,456"
-    env_ids = os.getenv("OWNER_IDS", "")
-    for token in env_ids.split(","):
-        token = token.strip()
-        if token.isdigit():
-            owner_ids.add(int(token))
+        env_ids = os.getenv("OWNER_IDS", "")
+        for token in env_ids.split(","):
+            token = token.strip()
+            if token.isdigit():
+                owner_ids.add(int(token))
 
-    return interaction.user.id in owner_ids
+        return interaction.user.id in owner_ids
+    return app_commands.check(predicate)
 
 
 class OpsCommands(commands.Cog):
@@ -37,15 +38,14 @@ class OpsCommands(commands.Cog):
         e = (
             discord.Embed(
                 title=f"{NAME} — Ping",
-                description=f"WebSocket: **{ws:.0f}ms**",
+                description=f"WebSocket: **{ws:.0f} ms**",
                 color=COLOR,
-            )
-            .set_footer(text=footer_text)
+            ).set_footer(text=footer_text)   # NOTE: footer_text is a STRING
         )
         await interaction.response.send_message(embed=e, ephemeral=True)
 
     @app_commands.command(name="reload", description="Reload all loaded cogs (owner only).")
-    @app_commands.check(_is_owner_interaction)
+    @owner_only()
     async def reload(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
@@ -72,8 +72,7 @@ class OpsCommands(commands.Cog):
                 title=f"{NAME} — Self Test",
                 description="OK.",
                 color=COLOR,
-            )
-            .set_footer(text=footer_text)
+            ).set_footer(text=footer_text)
         )
         await interaction.response.send_message(embed=e, ephemeral=True)
 
