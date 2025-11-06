@@ -1,35 +1,41 @@
-# cogs/welcome.py
-import discord
-from discord.ext import commands
-from utils.brand import COLOR, WELCOME_TITLE, footer, Z_HAPPY, SERVER_BANNER_URL, AVATAR_URL
+# cogs/welcome.py (add near top)
+from utils.roles import role_ladder
 
-WELCOME_DESC = (
-    "Thanks for inviting **Zephyra**!\n\n"
-    "Quick start:\n"
-    "1) `/channelselection` — pick channels for reaction-based translation\n"
-    "2) `/defaultlang <code>` — set your server language (autocomplete)\n"
-    "3) `/emote <emoji>` — set the translate reaction\n"
-    "4) `/guide` — post a how-to for your members"
-)
+# ... inside the cog class:
 
-class Welcome(commands.Cog):
-    def __init__(self, bot): self.bot = bot
-
-    @commands.Cog.listener()
-    async def on_guild_join(self, guild: discord.Guild):
-        embed = discord.Embed(title=f"{Z_HAPPY} {WELCOME_TITLE}", description=WELCOME_DESC, color=COLOR)
-        embed.set_footer(text=footer())
-        if SERVER_BANNER_URL:
-            embed.set_image(url=SERVER_BANNER_URL)
-        if AVATAR_URL:
-            embed.set_thumbnail(url=AVATAR_URL)
-
-        for ch in guild.text_channels:
-            perms = ch.permissions_for(guild.me)
-            if perms.send_messages and perms.embed_links:
+async def _ensure_role(self, guild: discord.Guild, name: str, color_int: int):
+    # find existing (case-insensitive)
+    for r in guild.roles:
+        if r.name.lower() == name.lower():
+            # sync color if changed
+            if r.colour.value != color_int:
                 try:
-                    await ch.send(embed=embed); break
+                    await r.edit(colour=discord.Colour(color_int), reason="Sync role ladder color")
                 except Exception:
                     pass
+            return r
+    # create if missing
+    try:
+        return await guild.create_role(
+            name=name,
+            colour=discord.Colour(color_int),
+            reason="Create role ladder (auto)",
+            mentionable=False,
+            hoist=False,
+        )
+    except Exception:
+        return None
 
-async def setup(bot): await bot.add_cog(Welcome(bot))
+async def ensure_role_ladder(self, guild: discord.Guild):
+    tiers = role_ladder()
+    for t in tiers:
+        await self._ensure_role(guild, t["name"], t["color"])
+
+# call from on_guild_join
+@commands.Cog.listener()
+async def on_guild_join(self, guild: discord.Guild):
+    # your existing welcome flow...
+    try:
+        await self.ensure_role_ladder(guild)
+    except Exception:
+        pass
