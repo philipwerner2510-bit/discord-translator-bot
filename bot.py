@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 # --- Branding (safe imports; won't crash if aliasing changed)
 try:
@@ -54,6 +54,7 @@ _synced_once = False  # one-time global sync guard
 async def on_ready():
     global _synced_once
     log.info("✅ Logged in as %s (%s) — %s", bot.user, bot.user.id, NAME)
+
     # One-time global sync so new/changed commands appear even if /ops sync isn't available yet
     if not _synced_once:
         try:
@@ -63,6 +64,25 @@ async def on_ready():
             log.error("❌ Slash command sync failed: %r", e)
         else:
             _synced_once = True
+
+    # Start rotating presence
+    if not rotate_presence.is_running():
+        rotate_presence.start()
+
+@tasks.loop(seconds=60)
+async def rotate_presence():
+    # Cycle neat, readable activities
+    total = getattr(bot, "total_translations", 0)
+    choices = [
+        discord.Activity(type=discord.ActivityType.watching, name="your messages 🌬️"),
+        discord.Activity(type=discord.ActivityType.playing, name="with languages"),
+        discord.Activity(type=discord.ActivityType.watching, name=f"{total} translations"),
+    ]
+    idx = int(datetime.utcnow().timestamp() // 60) % len(choices)
+    try:
+        await bot.change_presence(activity=choices[idx], status=discord.Status.online)
+    except Exception:
+        pass
 
 async def load_extensions():
     for ext in EXTS:
