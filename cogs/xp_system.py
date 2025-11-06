@@ -1,112 +1,64 @@
 # cogs/xp_system.py
-# XP system: passive message XP + /xp profile + /xp leaderboard (namespaced to avoid conflicts)
-
-from __future__ import annotations
-
+import math
 from typing import Optional
 import discord
-from discord.ext import commands
 from discord import app_commands
-
+from discord.ext import commands
 from utils import database
-from utils.brand import COLOR, footer_text, NAME
+from utils.brand import COLOR, NAME
+from utils.config import LEADERBOARD_PAGE
 
-LEADERBOARD_PAGE = 10   # entries per page
-XP_PER_MESSAGE = 1      # xp per non-bot message
-
-
-class XPCog(commands.Cog):
-    # Make an app command group to avoid name clashes with other cogs
-    xp = app_commands.Group(name="xp", description="XP commands")
-
+class XpSystem(commands.Cog, name="XP"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # --------------------------
-    # Passive XP: messages
-    # --------------------------
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot or not message.guild:
-            return
-        try:
-            await database.add_xp(
-                guild_id=message.guild.id,
-                user_id=message.author.id,
-                amount=XP_PER_MESSAGE,
-                msg_inc=1,
-            )
-        except Exception as e:
-            print(f"[xp] on_message failed in guild {message.guild.id}: {e}")
-
-    # --------------------------
-    # /xp profile
-    # --------------------------
-    @xp.command(name="profile", description="Show your XP profile.")
-    @app_commands.describe(user="Show profile for another member (optional)")
-    async def xp_profile(self, interaction: discord.Interaction, user: Optional[discord.Member] = None):
-        await interaction.response.defer(ephemeral=True)
-        if not interaction.guild:
-            await interaction.followup.send("This command can only be used in a server.", ephemeral=True)
-            return
-
-        member = user or interaction.user
-        gid = interaction.guild.id
-
+    # /profile
+    @app_commands.command(name="profile", description="Show your (or another member's) XP profile.")
+    @app_commands.describe(member="Whose profile to view (defaults to you)")
+    async def xp_profile(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
+        await interaction.response.defer(ephemeral=False)
+        member = member or interaction.user
+        gid = interaction.guild_id
         xp, msgs, trans, vsec = await database.get_xp(gid, member.id)
 
         e = discord.Embed(
-            title=f"{NAME} • Profile",
+            title=f"{member.display_name}'s Zephyra Profile",
             color=COLOR,
+            description=f"**XP:** {xp}\n**Messages:** {msgs}\n**Translations:** {trans}\n**Voice:** {vsec//60} min ({vsec}s)"
         )
-        e.set_author(name=str(member), icon_url=member.display_avatar.url if member.display_avatar else discord.Embed.Empty)
-        e.add_field(name="XP", value=f"{xp}", inline=True)
-        e.add_field(name="Messages", value=f"{msgs}", inline=True)
-        e.add_field(name="Translations", value=f"{trans}", inline=True)
-        e.add_field(name="Voice (sec)", value=f"{vsec}", inline=True)
-        e.set_footer(text=footer_text())
+        e.set_thumbnail(url=member.display_avatar.url)
+        e.set_footer(text=f"{NAME} — XP Profile")
+        await interaction.followup.send(embed=e)
 
-        await interaction.followup.send(embed=e, ephemeral=True)
-
-    # --------------------------
-    # /xp leaderboard
-    # --------------------------
-    @xp.command(name="leaderboard", description="Show the XP leaderboard for this server.")
-    @app_commands.describe(page="Page number (starts at 1)")
+    # /leaderboard
+    @app_commands.command(name="leaderboard", description="Show this server's XP leaderboard.")
+    @app_commands.describe(page="Page number (10 per page)")
     async def xp_leaderboard(self, interaction: discord.Interaction, page: Optional[int] = 1):
-        await interaction.response.defer(ephemeral=True)
-        if not interaction.guild:
-            await interaction.followup.send("This command can only be used in a server.", ephemeral=True)
-            return
-
+        await interaction.response.defer()
         page = max(1, page or 1)
         offset = (page - 1) * LEADERBOARD_PAGE
-        rows = await database.get_xp_leaderboard(interaction.guild.id, LEADERBOARD_PAGE, offset)
+        rows = await database.get_xp_leaderboard(interaction.guild_id, LEADERBOARD_PAGE, offset)
 
         if not rows:
-            await interaction.followup.send(f"No XP data yet for page {page}.", ephemeral=True)
+            await interaction.followup.send("No XP tracked yet on this server.")
             return
 
         lines = []
-        start_rank = offset + 1
-        for i, (user_id, xp, msgs, trans, vsec) in enumerate(rows, start=start_rank):
-            user = interaction.guild.get_member(user_id) or self.bot.get_user(user_id)
-            if isinstance(user, discord.Member):
-                name = user.mention
-            elif user is not None:
-                name = f"<@{user.id}>"
-            else:
-                name = f"<@{user_id}>"
-            lines.append(f"**{i}.** {name} — **{xp} XP** · {msgs} msgs · {trans} trans")
+        rank_start = offset + 1
+        for idx, (user_id, xp, msgs, trans, vsec) in enumerate(rows, start=0):
+            member = interaction.guild.get_member(user_id)
+            name = member.display_name if member else f"<@{user_id}>"
+            lines.append(
+                f"**{rank_start+idx}.** {name} — XP **{xp}** · Msg **{msgs}** · Tr **{trans}** · Voice **{vsec//60}m**"
+            )
 
         e = discord.Embed(
-            title=f"{NAME} • Leaderboard (Page {page})",
+            title=f"{interaction.guild.name} — XP Leaderboard",
             description="\n".join(lines),
             color=COLOR,
         )
-        e.set_footer(text=footer_text())
-        await interaction.followup.send(embed=e, ephemeral=True)
-
+        e.set_footer(text=f"{NAME} — Page {page}")
+        await interaction.followup.send(embed=e)
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(XPCog(bot))
+    await bot.add_cog(XpSystem(bot))
