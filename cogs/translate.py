@@ -9,7 +9,7 @@ from utils.brand import COLOR, footer, Z_CONFUSED, Z_SAD, FOOTER_TRANSLATED
 from utils import database
 from utils.language_data import SUPPORTED_LANGUAGES, label
 from utils.logging_utils import log_error
-from utils.config import XP_TRANSLATION  # <- use your global XP constant
+from utils.config import XP_TRANSLATION  # <- use this configured XP value
 
 # optional in-memory cache
 try:
@@ -88,15 +88,12 @@ class Translate(commands.Cog):
                 embed.set_footer(text=FOOTER_TRANSLATED)
                 await interaction.channel.send(embed=embed)
 
-                # ✅ XP for successful manual translation
+                # ✅ XP for manual translations
                 try:
-                    await database.add_activity(
-                        interaction.guild.id, interaction.user.id,
-                        xp=XP_TRANSLATION, translations=1
-                    )
+                    await database.add_translation_xp(interaction.guild.id, interaction.user.id, XP_TRANSLATION)
                 except Exception:
                     pass
-                # notify xp_system to update roles immediately
+                # ping xp_system role updater
                 self.bot.dispatch("xp_gain", interaction.guild.id, interaction.user.id)
 
             except Exception as e:
@@ -203,14 +200,14 @@ class Translate(commands.Cog):
 
             await dm_msg.edit(embed=embed, view=view)
 
-            # ✅ XP for successful reaction translation
+            # ✅ XP for reaction-triggered translations
             try:
-                await database.add_activity(gid, user.id, xp=XP_TRANSLATION, translations=1)
+                await database.add_translation_xp(gid, user.id, XP_TRANSLATION)
             except Exception:
                 pass
             self.bot.dispatch("xp_gain", gid, user.id)
 
-            # remove only the user's click, leave the bot reaction available for others
+            # remove only the user's click, leave the bot reaction
             try:
                 await reaction.remove(user)
             except Exception:
