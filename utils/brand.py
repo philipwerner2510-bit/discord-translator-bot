@@ -17,11 +17,19 @@ PURPLE  = 0x9B5CFF  # optional secondary accent
 PROFILE_IMAGE = "https://cdn.discordapp.com/attachments/1435845031817904248/1435845594764673054/Zephyra_Profile.png?ex=690d72ea&is=690c216a&hm=45675e0235508512c807062d379ff5d9786241e9902d203a9460af838bb283d3&"
 SERVER_BANNER = "https://cdn.discordapp.com/attachments/1435845031817904248/1435846183112413204/Zephyra_Server_banner.png?ex=690d7376&is=690c21f6&hm=f7e12b396e88b626a627f4c1c8fff3389c400dfa16afc08a3be8b780b4d69960&"
 
-# --- Footer text (offer multiple names some cogs used)
+# Backward-compat aliases some cogs expect:
+PROFILE_IMAGE_URL  = PROFILE_IMAGE
+SERVER_BANNER_URL  = SERVER_BANNER
+BOT_BANNER_URL     = SERVER_BANNER  # same banner asset as server
+
+# --- Footer text
 FOOTER_DEV = "Zephyra — Developed by Polarix1954"
 footer = FOOTER_DEV
 def footer_text() -> str:
     return FOOTER_DEV
+
+# Some cogs expect a separate translated footer; map it to the dev footer
+FOOTER_TRANSLATED = FOOTER_DEV
 
 # --- Custom Emojis (your official set)
 EMOJI = {
@@ -38,7 +46,7 @@ EMOJI = {
 def e(key: str, fallback: str = "") -> str:
     return EMOJI.get(key, fallback)
 
-# --- Per-emoji aliases some cogs import directly
+# Per-emoji aliases some cogs import directly
 Z_BASE     = EMOJI["base"]
 Z_ANGRY    = EMOJI["angry"]
 Z_CONFUSED = EMOJI["confused"]
