@@ -1,328 +1,271 @@
 # cogs/xp_system.py
-from __future__ import annotations
-import asyncio, time
+# Zephyra XP System: messages, voice, translations (hook), levels, prestige, leaderboard
+
+import asyncio
 import math
-import typing as T
+import random
+from datetime import datetime, timezone
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 
-from utils.brand import COLOR, footer
 from utils import database
+from utils.brand import COLOR, footer_text
 
-# =========================
-#        TUNING
-# =========================
-# Balanced amounts (your preference):
-XP_MSG                = 3      # per eligible message (with anti-spam)
-XP_TRANSLATION        = 9      # each successful translation (manual or reaction)
-XP_VOICE_PER_MIN      = 2      # per full minute in voice
-XP_SLASH              = 3      # each successful slash command (except blacklisted)
+LEVEL_ANNOUNCE_COOLDOWN = 3  # seconds anti-spam per user
 
-# Anti-spam for messages:
-MSG_MIN_CHARS         = 5      # ignore tiny messages like "A"
-MSG_COOLDOWN_S        = 10     # per-user cooldown between earning message XP
-MSG_DUP_WINDOW_S      = 45     # ignore duplicate content within this time window
+# Mee6-like XP curve
+def xp_needed_for_level(level: int) -> int:
+    # sum_{i=0..L-1} (5i^2 + 50i + 100)
+    total = 0
+    for i in range(level):
+        total += 5 * i * i + 50 * i + 100
+    return total
 
-# Leaderboard & roles:
-LEADERBOARD_PAGE      = 10     # entries per page
-LEVEL_ROLE_STEP       = 5      # create/apply a role every N levels
-# Zephyra-themed gradient (light blue → cyan → purple):
-LEVEL_COLOR_HEX       = [0xB4F1FF, 0x7EE8FF, 0x48DBFF, 0x18CDF7, 0x00BEEA,
-                         0x00A6E0, 0x5C8AE1, 0x7B6BE7, 0x8B55EB, 0x9B5CFF]
+def level_from_xp(xp: int) -> int:
+    # binary search level
+    lo, hi = 0, 1000
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if xp_needed_for_level(mid) <= xp:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
 
-# =========================
-#      LEVEL CURVE
-# =========================
-# Smooth RPG curve (Option B):
-# XP needed to go from level n → n+1:  5*n^2 + 50*n
-def xp_to_next(level: int) -> int:
-    return 5 * (level ** 2) + 50 * level
-
-def level_progress(total_xp: int) -> tuple[int, int, int]:
-    """Return (level, cur_into_level, needed_for_next)."""
-    level = 1
-    remain = max(0, total_xp)
-    while True:
-        need = xp_to_next(level)
-        if remain < need:
-            return level, remain, need
-        remain -= need
-        level += 1
-
-def highest_qualified_level(total_xp: int) -> int:
-    lvl, cur, need = level_progress(total_xp)
-    return lvl
-
-# =========================
-#    INTERNAL HELPERS
-# =========================
-def _is_level_role(role: discord.Role) -> bool:
-    # Generic naming, no Zephyra branding: "Level X+"
-    return role.name.startswith("Level ") and role.name.endswith("+")
-
-def _role_threshold(role: discord.Role) -> int | None:
-    # Parse "Level {lvl}+"
-    try:
-        mid = role.name[len("Level "): -1].strip()
-        return int(mid)
-    except Exception:
-        return None
-
-async def _grant_xp_and_maybe_roles(
-    cog: "XpSystem",
-    member: discord.Member,
-    delta_xp: int = 0,
-    messages: int = 0,
-    translations: int = 0,
-    voice_seconds: int = 0,
-):
-    gid, uid = member.guild.id, member.id
-    # Update DB
-    await database.add_activity(
-        gid, uid,
-        xp=delta_xp,
-        messages=messages,
-        translations=translations,
-        voice_seconds=voice_seconds
-    )
-    # Then adjust roles
-    await cog._ensure_best_level_role(member)
-
-# =========================
-#          COG
-# =========================
-class XpSystem(commands.Cog):
+class XPCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._last_msg: dict[tuple[int,int], tuple[float,str]] = {}  # (gid,uid) -> (ts, normalized_content)
-        self._msg_cd:   dict[tuple[int,int], float] = {}             # (gid,uid) -> last earn ts
-        self._voice_join: dict[tuple[int,int], float] = {}           # (gid,uid) -> join timestamp
+        # track voice join timestamps: {(guild_id, user_id): ts_sec}
+        self._voice_join: dict[tuple[int, int], float] = {}
+        # per-user cooldown for announcing
+        self._announce_gate: dict[tuple[int, int], float] = {}
 
-    # ===== Message XP with anti-spam =====
+    # ==========================
+    # MESSAGE XP
+    # ==========================
     @commands.Cog.listener()
-    async def on_message(self, m: discord.Message):
-        if not m.guild or m.author.bot:
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or not message.guild:
             return
-        content = (m.content or "").strip()
-        if len(content) < MSG_MIN_CHARS:
-            return
+        if len(message.content.strip()) < 3:
+            return  # ignore tiny messages / emote spam
 
-        gid, uid = m.guild.id, m.author.id
-        now = time.time()
-        key = (gid, uid)
+        gid = message.guild.id
+        uid = message.author.id
+        cfg = await database.get_xp_config(gid)
 
-        # cooldown
-        last = self._msg_cd.get(key, 0.0)
-        if now - last < MSG_COOLDOWN_S:
-            return
+        gain = random.randint(cfg["msg_xp_min"], cfg["msg_xp_max"])
+        await database.add_xp(gid, uid, delta_xp=gain, delta_messages=1)
 
-        # duplicate within window
-        normalized = content.lower()
-        prev = self._last_msg.get(key)
-        if prev and (now - prev[0] < MSG_DUP_WINDOW_S) and prev[1] == normalized:
-            return
+        # Level-up detect & announce
+        await self._maybe_announce_levelup(message.channel, message.author, gid)
 
-        # Accept → record & grant
-        self._msg_cd[key] = now
-        self._last_msg[key] = (now, normalized)
-
-        try:
-            await _grant_xp_and_maybe_roles(self, m.author, delta_xp=XP_MSG, messages=1)
-        except Exception:
-            pass
-
-    # ===== Voice XP (join/leave accounting) =====
+    # ==========================
+    # VOICE XP
+    # ==========================
     @commands.Cog.listener()
-    async def on_voice_state_update(self, member: discord.Member,
-                                    before: discord.VoiceState, after: discord.VoiceState):
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         if member.bot or not member.guild:
             return
         gid, uid = member.guild.id, member.id
         key = (gid, uid)
 
-        # Joined a channel
+        # joined voice
         if not before.channel and after.channel:
-            self._voice_join[key] = time.time()
+            self._voice_join[key] = discord.utils.utcnow().timestamp()
             return
 
-        # Left channel or switched channels
-        if before.channel and (not after.channel or before.channel.id != after.channel.id):
+        # left voice
+        if before.channel and not after.channel:
             start = self._voice_join.pop(key, None)
             if start:
-                delta = max(0, int(time.time() - start))
-                if delta >= 60:
-                    minutes = delta // 60
+                minutes = max(0, int((discord.utils.utcnow().timestamp() - start) / 60))
+                if minutes > 0:
+                    cfg = await database.get_xp_config(gid)
+                    gain = minutes * cfg["voice_xp_per_min"]
+                    await database.add_xp(gid, uid, delta_xp=gain, delta_voice_seconds=minutes * 60)
+                    # announce in last text channel used? We'll DM silently (less noisy)
                     try:
-                        await _grant_xp_and_maybe_roles(
-                            self, member,
-                            delta_xp=minutes * XP_VOICE_PER_MIN,
-                            voice_seconds=delta
-                        )
+                        await self._maybe_announce_levelup(member.dm_channel or await member.create_dm(), member, gid)
                     except Exception:
                         pass
 
-    # ===== Slash command XP (except blacklisted groups) =====
-    @commands.Cog.listener()
-    async def on_app_command_completion(self, interaction: discord.Interaction, command: app_commands.Command):
-        try:
-            if not interaction.guild or interaction.user.bot:
-                return
-            # Avoid awarding XP for management/admin commands that could be spammed
-            qname = getattr(command, "qualified_name", command.name)  # e.g., "ops sync", "xp profile"
-            lowered = qname.lower()
-            blacklist_prefixes = ("ops", "owner")  # admin/owner tools
-            if lowered.startswith(blacklist_prefixes):
-                return
-            # Don't farm within xp group itself except profile/leaderboard are fine?
-            # We'll allow /xp profile and /xp leaderboard to give XP too (small amount)
-            member = interaction.guild.get_member(interaction.user.id)
-            if not member:
-                return
-            await _grant_xp_and_maybe_roles(self, member, delta_xp=XP_SLASH)
-        except Exception:
-            pass
+    # ==========================
+    # TRANSLATION XP (public hook)
+    # ==========================
+    async def award_translation_xp(self, guild_id: int, user_id: int):
+        cfg = await database.get_xp_config(guild_id)
+        await database.add_xp(guild_id, user_id, delta_xp=cfg["translate_xp"], delta_translations=1)
 
-    # ===== React to translation XP events (emitted by translate.py) =====
-    @commands.Cog.listener()
-    async def on_xp_gain(self, guild_id: int, user_id: int):
-        """translate.py dispatches this after awarding translation XP so we can update roles immediately."""
-        try:
-            guild = self.bot.get_guild(guild_id)
-            if not guild:
-                return
-            member = guild.get_member(user_id)
-            if not member:
-                return
-            await self._ensure_best_level_role(member)
-        except Exception:
-            pass
-
-    # ===== XP Commands =====
-    xp = app_commands.Group(name="xp", description="Activity & leveling")
-
-    @xp.command(name="profile", description="Show XP profile (level, progress, counters).")
-    async def xp_profile(self, it: discord.Interaction, user: discord.User | None = None):
-        await it.response.defer()
-        user = user or it.user
-        gid = it.guild.id if it.guild else None
+    # ==========================
+    # Level-up announce gate + embed
+    # ==========================
+    async def _maybe_announce_levelup(self, channel: discord.abc.Messageable, user: discord.abc.User, gid: int):
         xp, msgs, trans, vsec = await database.get_xp(gid, user.id)
-        lvl, cur, need = level_progress(xp)
+        new_level = level_from_xp(xp)
+        # store last announced level in-memory gate (per process). Good enough.
+        key = (gid, user.id)
+        now = discord.utils.utcnow().timestamp()
+        if self._announce_gate.get(key, 0) + LEVEL_ANNOUNCE_COOLDOWN > now:
+            return
+        self._announce_gate[key] = now
 
-        bar_len = 22
-        filled = int((cur / max(1, need)) * bar_len)
-        bar = "▰" * filled + "▱" * (bar_len - filled)
-
-        desc = (
-            f"**Level {lvl}** — **{xp} XP**\n"
-            f"`{bar}`  **{cur}/{need}** to next\n\n"
-            f"**Messages:** {msgs} • **Translations:** {trans} • **Voice:** {vsec//60} min"
-        )
-        e = discord.Embed(title=f"{user.display_name}", description=desc, color=COLOR)
-        e.set_footer(text=footer())
-        e.set_thumbnail(url=user.display_avatar.url)
-        await it.followup.send(embed=e)
-
-    @xp.command(name="leaderboard", description="Top XP members in this server.")
-    async def xp_leaderboard(self, it: discord.Interaction, page: int = 1):
-        await it.response.defer()
-        gid = it.guild.id if it.guild else None
-        page = max(1, page)
-        offset = (page - 1) * LEADERBOARD_PAGE
-        rows = await database.get_xp_leaderboard(gid, LEADERBOARD_PAGE, offset)
-        if not rows:
-            return await it.followup.send("No activity yet. Start chatting, translating, or talking in voice!")
-
-        lines = []
-        start_idx = offset + 1
-        medal = {0:"🥇",1:"🥈",2:"🥉"}
-        for idx, (uid, xp, msgs, trans, vsec) in enumerate(rows):
-            m = it.guild.get_member(uid) or f"<@{uid}>"
-            lvl = highest_qualified_level(xp)
-            icon = medal.get(idx, f"#{start_idx+idx}")
-            lines.append(f"**{icon}** {getattr(m, 'display_name', m)} — **Lv {lvl}** • **{xp} XP**")
-
-        e = discord.Embed(title="🏆 Activity Leaderboard", description="\n".join(lines), color=COLOR)
-        e.set_footer(text=f"{footer()} • Page {page}")
-        await it.followup.send(embed=e)
-
-    # ---- Level roles management: create/update ----
-    @xp.command(name="roles_setup", description="Create or refresh level roles (admin).")
-    @app_commands.describe(step="Create a role every N levels (default 5)", count="How many tiers to prepare (default 10)")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def xp_roles_setup(self, it: discord.Interaction, step: int = LEVEL_ROLE_STEP, count: int = 10):
-        await it.response.defer(ephemeral=True)
-        guild = it.guild
-        created = 0
-        updated = 0
-        for i in range(count):
-            lvl = (i+1) * step
-            name = f"Level {lvl}+"
-            color = discord.Color(LEVEL_COLOR_HEX[i % len(LEVEL_COLOR_HEX)])
-            role = discord.utils.get(guild.roles, name=name)
+        # We can’t easily know "previous level" here without extra state.
+        # Instead, announce on reaching exact threshold (rare double-counts avoided by cooldown).
+        needed = xp_needed_for_level(new_level)
+        if xp == needed and new_level > 0:
+            cfg = await database.get_xp_config(gid)
+            if not cfg["announce_levelups"]:
+                return
+            e = discord.Embed(
+                title=f"Level Up!",
+                description=f"{user.mention} reached **Level {new_level}** 🎉",
+                color=COLOR,
+            )
+            e.set_footer(text=footer_text())
             try:
-                if role:
-                    await role.edit(color=color, reason="Level role refresh")
-                    updated += 1
-                else:
-                    await guild.create_role(name=name, color=color, reason="Create level role")
-                    created += 1
+                await channel.send(embed=e)
             except Exception:
                 pass
-        await it.followup.send(f"Level roles ready. Created: {created}, updated: {updated}.", ephemeral=True)
 
-    # ---- Force re-check and assign best role to a user/admin ----
-    @xp.command(name="roles_apply", description="Re-apply the best level role to a member (admin).")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def xp_roles_apply(self, it: discord.Interaction, member: discord.Member | None = None):
-        await it.response.defer(ephemeral=True)
-        member = member or it.user
-        try:
-            await self._ensure_best_level_role(member)
-            await it.followup.send(f"Applied best level role to {member.mention}.", ephemeral=True)
-        except Exception as e:
-            await it.followup.send(f"Failed: {e}", ephemeral=True)
+    # ==========================
+    # COMMANDS: /profile /leaderboard
+    # ==========================
+    xp = app_commands.Group(name="xp", description="XP profile and server leaderboard")
 
-    # ===== Role assignment core =====
-    async def _ensure_best_level_role(self, member: discord.Member):
-        guild = member.guild
-        total_xp, *_ = await database.get_xp(guild.id, member.id)
-        lvl = highest_qualified_level(total_xp)
+    @xp.command(name="profile", description="Show your Zephyra XP profile")
+    async def xp_profile(self, interaction: discord.Interaction, member: Optional[discord.Member] = None):
+        await interaction.response.defer(ephemeral=False)
+        user = member or interaction.user
+        gid = interaction.guild.id
+        xp, msgs, trans, vsec = await database.get_xp(gid, user.id)
+        level = level_from_xp(xp)
+        nxt = xp_needed_for_level(level + 1)
+        now_needed = max(0, nxt - xp)
+        bar = self._progress_bar(xp_needed_for_level(level), nxt, xp)
 
-        # Find all level roles and sort by threshold
-        level_roles: list[tuple[int, discord.Role]] = []
-        for r in guild.roles:
-            if _is_level_role(r):
-                th = _role_threshold(r)
-                if th is not None:
-                    level_roles.append((th, r))
-        if not level_roles:
-            return  # nothing to assign
+        e = discord.Embed(
+            title=f"{user.display_name} — Profile",
+            color=COLOR,
+        )
+        e.add_field(name="Level", value=f"**{level}**", inline=True)
+        e.add_field(name="XP", value=f"{xp:,} (next in **{now_needed:,}**)", inline=True)
+        e.add_field(name="\u200b", value="\u200b", inline=True)
+        e.add_field(name="Messages", value=f"{msgs:,}", inline=True)
+        e.add_field(name="Translations", value=f"{trans:,}", inline=True)
+        e.add_field(name="Voice", value=f"{int(vsec/60):,} min", inline=True)
+        e.add_field(name="Progress", value=bar, inline=False)
+        e.set_thumbnail(url=user.display_avatar.url)
+        e.set_footer(text=footer_text())
+        await interaction.followup.send(embed=e)
 
-        level_roles.sort(key=lambda t: t[0])
-        # pick the highest role the member qualifies for
-        target: discord.Role | None = None
-        for th, role in level_roles:
-            if lvl >= th:
-                target = role
-            else:
-                break
+    @xp.command(name="leaderboard", description="Show the server XP leaderboard")
+    async def xp_leaderboard(self, interaction: discord.Interaction, page: Optional[int] = 1):
+        await interaction.response.defer(ephemeral=False)
+        gid = interaction.guild.id
+        per_page = 10
+        offset = max(0, (page - 1) * per_page)
+        rows = await database.get_xp_leaderboard(gid, per_page, offset)
 
-        # remove all level roles not target; give target if missing
-        to_remove = [r for _, r in level_roles if r in member.roles and r is not target]
-        give = target if (target and target not in member.roles) else None
+        if not rows:
+            await interaction.followup.send("No XP yet. Start chatting and translating!")
+            return
 
-        try:
-            if to_remove:
-                await member.remove_roles(*to_remove, reason="Level role cleanup")
-        except Exception:
-            pass
-        try:
-            if give:
-                await member.add_roles(give, reason="Level role promotion")
-        except Exception:
-            pass
+        lines = []
+        rank = offset + 1
+        for uid, xp, msgs, trans, vsec in rows:
+            member = interaction.guild.get_member(uid)
+            name = member.display_name if member else f"User {uid}"
+            lvl = level_from_xp(xp)
+            lines.append(f"**{rank}. {name}** — Lvl {lvl} • {xp:,} XP • {msgs:,} msgs • {trans:,} tr • {int(vsec/60):,} min")
+            rank += 1
+
+        e = discord.Embed(
+            title=f"XP Leaderboard — Page {page}",
+            description="\n".join(lines),
+            color=COLOR,
+        )
+        e.set_footer(text=footer_text())
+        await interaction.followup.send(embed=e)
+
+    def _progress_bar(self, start: int, end: int, value: int, width: int = 20) -> str:
+        if end <= start:
+            return "■" * width
+        frac = (value - start) / (end - start)
+        filled = max(0, min(width, int(round(frac * width))))
+        return "■" * filled + "□" * (width - filled)
+
+    # ==========================
+    # ADMIN CONFIG: /xpconfig ...
+    # ==========================
+    xpconfig = app_commands.Group(name="xpconfig", description="Configure XP settings (admins only)")
+
+    def _admin_check(self, it: discord.Interaction) -> bool:
+        return it.user.guild_permissions.manage_guild
+
+    @xpconfig.command(name="show", description="Show current XP configuration")
+    async def cfg_show(self, interaction: discord.Interaction):
+        if not self._admin_check(interaction):
+            await interaction.response.send_message("You need **Manage Server**.", ephemeral=True)
+            return
+        cfg = await database.get_xp_config(interaction.guild.id)
+        e = discord.Embed(
+            title="XP Configuration",
+            color=COLOR,
+            description=(
+                f"Message XP: **{cfg['msg_xp_min']}–{cfg['msg_xp_max']}**\n"
+                f"Translate XP: **{cfg['translate_xp']}**\n"
+                f"Voice XP per min: **{cfg['voice_xp_per_min']}**\n"
+                f"Announce level-ups: **{'On' if cfg['announce_levelups'] else 'Off'}**\n"
+                f"Prestige threshold: **{cfg['prestige_threshold']:,} XP**"
+            )
+        )
+        e.set_footer(text=footer_text())
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
+    @xpconfig.command(name="message", description="Set message XP range")
+    @app_commands.describe(min_xp="Minimum XP per message", max_xp="Maximum XP per message")
+    async def cfg_message(self, interaction: discord.Interaction, min_xp: int, max_xp: int):
+        if not self._admin_check(interaction):
+            await interaction.response.send_message("You need **Manage Server**.", ephemeral=True)
+            return
+        if min_xp < 0 or max_xp < 0 or max_xp < min_xp:
+            await interaction.response.send_message("Invalid range.", ephemeral=True)
+            return
+        await database.set_xp_config(interaction.guild.id, msg_xp_min=min_xp, msg_xp_max=max_xp)
+        await interaction.response.send_message(f"Message XP updated: **{min_xp}–{max_xp}**", ephemeral=True)
+
+    @xpconfig.command(name="translate", description="Set XP per translation")
+    async def cfg_translate(self, interaction: discord.Interaction, xp_per_translation: int):
+        if not self._admin_check(interaction):
+            await interaction.response.send_message("You need **Manage Server**.", ephemeral=True)
+            return
+        if xp_per_translation < 0:
+            await interaction.response.send_message("Invalid value.", ephemeral=True)
+            return
+        await database.set_xp_config(interaction.guild.id, translate_xp=xp_per_translation)
+        await interaction.response.send_message(f"Translate XP set to **{xp_per_translation}**", ephemeral=True)
+
+    @xpconfig.command(name="voice", description="Set XP gained per minute in voice")
+    async def cfg_voice(self, interaction: discord.Interaction, xp_per_minute: int):
+        if not self._admin_check(interaction):
+            await interaction.response.send_message("You need **Manage Server**.", ephemeral=True)
+            return
+        if xp_per_minute < 0:
+            await interaction.response.send_message("Invalid value.", ephemeral=True)
+            return
+        await database.set_xp_config(interaction.guild.id, voice_xp_per_min=xp_per_minute)
+        await interaction.response.send_message(f"Voice XP per minute set to **{xp_per_minute}**", ephemeral=True)
+
+    @xpconfig.command(name="announce", description="Toggle level-up announcements")
+    async def cfg_announce(self, interaction: discord.Interaction, enabled: bool):
+        if not self._admin_check(interaction):
+            await interaction.response.send_message("You need **Manage Server**.", ephemeral=True)
+            return
+        await database.set_xp_config(interaction.guild.id, announce_levelups=enabled)
+        await interaction.response.send_message(f"Level-up announcements **{'enabled' if enabled else 'disabled'}**.", ephemeral=True)
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(XpSystem(bot))
+    await bot.add_cog(XPCog(bot))
