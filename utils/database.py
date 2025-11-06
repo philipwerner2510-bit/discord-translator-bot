@@ -52,7 +52,6 @@ async def _ensure_base_tables(db: aiosqlite.Connection):
             emote      TEXT
         )
     """)
-    # Optional: track monthly AI usage (tokens/cost). Harmless if unused.
     await db.execute("""
         CREATE TABLE IF NOT EXISTS ai_usage(
             month   TEXT PRIMARY KEY,   -- e.g. '2025-11'
@@ -62,7 +61,7 @@ async def _ensure_base_tables(db: aiosqlite.Connection):
     """)
 
 # -----------------------------
-# XP table
+# XP & Config tables
 # -----------------------------
 async def _ensure_xp_table(db: aiosqlite.Connection):
     await db.execute("""
@@ -77,6 +76,20 @@ async def _ensure_xp_table(db: aiosqlite.Connection):
         )
     """)
 
+async def _ensure_xp_config_table(db: aiosqlite.Connection):
+    # Defaults mirror common bot curves; admin can change via /xpconfig
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS xp_config(
+            guild_id            INTEGER PRIMARY KEY,
+            msg_xp_min          INTEGER DEFAULT 10,
+            msg_xp_max          INTEGER DEFAULT 15,
+            translate_xp        INTEGER DEFAULT 20,
+            voice_xp_per_min    INTEGER DEFAULT 3,
+            announce_levelups   INTEGER DEFAULT 1,
+            prestige_threshold  INTEGER DEFAULT 100_000
+        )
+    """)
+
 # -----------------------------
 # Public bootstrap (call this on boot)
 # -----------------------------
@@ -85,6 +98,7 @@ async def ensure_tables():
     try:
         await _ensure_base_tables(db)
         await _ensure_xp_table(db)
+        await _ensure_xp_config_table(db)
         await db.commit()
     finally:
         await db.close()
@@ -214,19 +228,14 @@ async def add_xp(
     delta_translations: int = 0,
     delta_voice_seconds: int = 0
 ):
-    """
-    Upserts a row for (guild_id, user_id) and adds the deltas.
-    """
     db = await get_conn()
     try:
-        # Ensure row exists
         await db.execute("""
             INSERT INTO xp (guild_id, user_id, xp, messages, translations, voice_seconds)
             VALUES (?, ?, 0, 0, 0, 0)
             ON CONFLICT(guild_id, user_id) DO NOTHING
         """, (guild_id, user_id))
 
-        # Apply increments
         await db.execute("""
             UPDATE xp
             SET xp = xp + ?,
@@ -240,9 +249,6 @@ async def add_xp(
         await db.close()
 
 async def get_xp(guild_id: int, user_id: int) -> Tuple[int, int, int, int]:
-    """
-    Returns (xp, messages, translations, voice_seconds). Returns zeros if absent.
-    """
     db = await get_conn()
     try:
         cur = await db.execute("""
@@ -257,10 +263,6 @@ async def get_xp(guild_id: int, user_id: int) -> Tuple[int, int, int, int]:
         await db.close()
 
 async def get_xp_leaderboard(guild_id: int, limit: int = 10, offset: int = 0):
-    """
-    Returns rows of (user_id, xp, messages, translations, voice_seconds),
-    ordered by xp desc.
-    """
     db = await get_conn()
     try:
         cur = await db.execute("""
@@ -272,5 +274,84 @@ async def get_xp_leaderboard(guild_id: int, limit: int = 10, offset: int = 0):
         """, (guild_id, limit, offset))
         rows = await cur.fetchall()
         return [(int(r[0]), int(r[1]), int(r[2]), int(r[3]), int(r[4])) for r in rows]
+    finally:
+        await db.close()
+
+# =========================================================
+# XP Config helpers
+# =========================================================
+async def get_xp_config(guild_id: int):
+    db = await get_conn()
+    try:
+        cur = await db.execute("""
+            SELECT msg_xp_min, msg_xp_max, translate_xp, voice_xp_per_min, announce_levelups, prestige_threshold
+            FROM xp_config WHERE guild_id=?
+        """, (guild_id,))
+        row = await cur.fetchone()
+        if row:
+            return {
+                "msg_xp_min": row[0],
+                "msg_xp_max": row[1],
+                "translate_xp": row[2],
+                "voice_xp_per_min": row[3],
+                "announce_levelups": bool(row[4]),
+                "prestige_threshold": row[5],
+            }
+        # Defaults if not set
+        return {
+            "msg_xp_min": 10,
+            "msg_xp_max": 15,
+            "translate_xp": 20,
+            "voice_xp_per_min": 3,
+            "announce_levelups": True,
+            "prestige_threshold": 100_000,
+        }
+    finally:
+        await db.close()
+
+async def set_xp_config(
+    guild_id: int,
+    msg_xp_min: Optional[int] = None,
+    msg_xp_max: Optional[int] = None,
+    translate_xp: Optional[int] = None,
+    voice_xp_per_min: Optional[int] = None,
+    announce_levelups: Optional[bool] = None,
+    prestige_threshold: Optional[int] = None,
+):
+    db = await get_conn()
+    try:
+        # upsert row first
+        await db.execute("""
+            INSERT INTO xp_config(guild_id)
+            VALUES (?)
+            ON CONFLICT(guild_id) DO NOTHING
+        """, (guild_id,))
+        # build dynamic update
+        fields = []
+        params = []
+        if msg_xp_min is not None:
+            fields.append("msg_xp_min=?")
+            params.append(msg_xp_min)
+        if msg_xp_max is not None:
+            fields.append("msg_xp_max=?")
+            params.append(msg_xp_max)
+        if translate_xp is not None:
+            fields.append("translate_xp=?")
+            params.append(translate_xp)
+        if voice_xp_per_min is not None:
+            fields.append("voice_xp_per_min=?")
+            params.append(voice_xp_per_min)
+        if announce_levelups is not None:
+            fields.append("announce_levelups=?")
+            params.append(1 if announce_levelups else 0)
+        if prestige_threshold is not None:
+            fields.append("prestige_threshold=?")
+            params.append(prestige_threshold)
+
+        if fields:
+            sql = f"UPDATE xp_config SET {', '.join(fields)} WHERE guild_id=?"
+            params.append(guild_id)
+            await db.execute(sql, tuple(params))
+            await db.commit()
     finally:
         await db.close()
