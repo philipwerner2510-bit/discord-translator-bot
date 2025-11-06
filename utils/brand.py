@@ -6,6 +6,7 @@ NAME = "Zephyra"
 
 # Brand color — Cyan (Stormwind)
 COLOR = 0x00E6F6
+ACCENT = COLOR
 
 
 # ───────────────────────────────────────────────────────────
