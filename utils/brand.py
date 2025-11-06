@@ -1,20 +1,31 @@
 # utils/brand.py
-# Centralized branding for Zephyra
+# — Centralized branding for Zephyra (backward-compatible) —
 
-# --- Names & titles
+# ===== Names & Titles =====
 NAME = "Zephyra"
-INVITE_TITLE = f"Invite {NAME}"
 
-# --- Colors
-PRIMARY = 0x00E6F6          # storm-cyan (main embed color)
-ACCENT  = PRIMARY           # many cogs import ACCENT; keep as alias
-COLOR   = PRIMARY           # backward-compat alias for older imports
-PURPLE  = 0x9B5CFF          # optional secondary accent
+INVITE_TITLE  = f"Invite {NAME}"
+WELCOME_TITLE = f"Welcome — {NAME}"
+HELP_TITLE    = f"{NAME} Help"
+GUIDE_TITLE   = f"Getting Started with {NAME}"
 
-# --- Footer text
-FOOTER_DEV = "Zephyra — Developed by Polarix1954"
+# ===== Colors =====
+PRIMARY = 0x00E6F6          # main embed color (storm cyan)
+ACCENT  = PRIMARY           # alias used by some cogs
+COLOR   = PRIMARY           # legacy alias for older imports
+PURPLE  = 0x9B5CFF          # secondary accent if needed
 
-# --- Emojis (your uploaded custom emojis)
+# ===== Footer text =====
+FOOTER_DEV = f"{NAME} — Developed by Polarix1954"
+
+def footer(*_args, **_kwargs) -> str:
+    """
+    Backward-compatible helper some cogs import as a function.
+    We no longer put emojis in footers (Discord won’t render custom ones in footers).
+    """
+    return FOOTER_DEV
+
+# ===== Custom emojis (uploaded to your app/user) =====
 EMOJI = {
     "base":     "<:Zephyra:1435530499408924672>",
     "angry":    "<:Zephyra_angry:1435525299692372051>",
