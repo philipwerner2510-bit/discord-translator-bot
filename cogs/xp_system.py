@@ -1,44 +1,116 @@
+# cogs/xp_system.py
+from __future__ import annotations
+
+import math
 import discord
 from discord.ext import commands
 from discord import app_commands
 
-from utils.brand import COLOR, footer_text, NAME, Z_NUM_1, Z_NUM_2, Z_NUM_3
+from utils.brand import COLOR, footer  # no other brand pulls
 from utils import database
-# inside the cog class:
+from utils.roles import role_ladder
 
-async def sync_level_role(self, member: discord.Member, level: int):
-    guild = member.guild
-    tiers = role_ladder()
-    # Map by lower name for easy checks
-    ladder_names = {t["name"].lower() for t in tiers}
-    target = best_role_for_level(level)["name"].lower()
+# Leaderboard rank emotes — embed here so we don't rely on brand.py
+Z_NUM_1 = "<:Zephyra_emote_1:1436100371058790431>"
+Z_NUM_2 = "<:Zephyra_emote_2:1436100410292043866>"
+Z_NUM_3 = "<:Zephyra_emote_3:1436100442571669695>"
 
-    # Ensure all roles exist (if someone deleted them)
-    for t in tiers:
-        try:
-            await self.bot.get_cog("Welcome")._ensure_role(guild, t["name"], t["color"])
-        except Exception:
-            pass
+# --- leveling rules ---
+LEVEL_CAP = 100
 
-    # Refresh role objects
-    role_by_name = {r.name.lower(): r for r in guild.roles}
-    add_role = role_by_name.get(target)
+def xp_for_level(level: int) -> int:
+    """Total XP required to REACH `level`. L1=0, grows quadratic-ish."""
+    if level <= 1:
+        return 0
+    # Smooth quadratic curve: ~ 50 * n^2
+    return 50 * (level - 1) * (level - 1)
 
-    # Remove all ladder roles except the target
-    to_remove = [r for r in member.roles if r.name.lower() in ladder_names and r.name.lower() != target]
-    for r in to_remove:
-        try:
-            await member.remove_roles(r, reason="Level ladder sync")
-        except Exception:
-            pass
+def level_from_xp(total_xp: int) -> int:
+    """Inverse of xp_for_level with clamp to LEVEL_CAP."""
+    # Solve 50*(l-1)^2 <= xp
+    l = int(math.sqrt(max(0, total_xp) / 50.0) + 1)
+    return max(1, min(LEVEL_CAP, l))
 
-    # Add target if missing
-    if add_role and add_role not in member.roles:
-        try:
-            await member.add_roles(add_role, reason=f"Reached level {level}")
-        except Exception:
-            pass
+def progress_bar(progress: float, width: int = 16) -> str:
+    """Discord-friendly bar using ▰ (filled) and ▱ (empty)."""
+    progress = max(0.0, min(1.0, progress))
+    filled = int(round(progress * width))
+    return "▰" * filled + "▱" * (width - filled)
 
-# wherever you handle XP gain/level up:
-# After computing new level (and detecting level change), call:
-# await self.sync_level_role(member, new_level)
+def _footer_text() -> str:
+    try:
+        return footer()
+    except TypeError:
+        return str(footer)
+
+class XPSystem(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    # ----- helpers used by other cogs -----
+    async def _on_text_activity(self, guild_id: int, user_id: int):
+        # call this from your message/translate flows if you want passive gain
+        await database.add_message_xp(guild_id, user_id, 3)  # small passive
+        # role sync can be dispatched by events cog if desired
+
+    # ----- /profile -----
+    @app_commands.command(name="profile", description="Show your Zephyra level profile.")
+    @app_commands.describe(member="See another member's profile.")
+    async def xp_profile(self, interaction: discord.Interaction, member: discord.Member | None = None):
+        member = member or interaction.user
+        gid = interaction.guild.id
+
+        xp, msgs, trans, vsec = await database.get_xp(gid, member.id)
+        level = level_from_xp(xp)
+        nxt = min(LEVEL_CAP, level + 1)
+        cur_req = xp_for_level(level)
+        nxt_req = xp_for_level(nxt)
+        span = max(1, nxt_req - cur_req)
+        pct = (xp - cur_req) / span if span else 1.0
+
+        bar = progress_bar(pct, width=16)  # exact bar you asked for
+
+        e = (discord.Embed(title=f"{member.display_name}", color=COLOR)
+             .add_field(name="Level", value=f"{level}/{LEVEL_CAP}")
+             .add_field(name="XP", value=f"{xp:,} / {nxt_req:,}")
+             .add_field(name="Progress", value=bar, inline=False)
+             .add_field(name="Messages", value=str(msgs))
+             .add_field(name="Translations", value=str(trans))
+             .add_field(name="Voice (s)", value=str(vsec))
+             .set_thumbnail(url=member.display_avatar.url)
+             .set_footer(text=_footer_text()))
+        await interaction.response.send_message(embed=e)
+
+    # ----- /leaderboard -----
+    @app_commands.command(name="leaderboard", description="Top XP on this server.")
+    async def xp_leaderboard(self, interaction: discord.Interaction):
+        gid = interaction.guild.id
+        rows = await database.get_xp_leaderboard(gid, limit=10, offset=0)
+
+        if not rows:
+            e = discord.Embed(description="No XP yet. Start chatting or translating!", color=COLOR)
+            e.set_footer(text=_footer_text())
+            return await interaction.response.send_message(embed=e, ephemeral=True)
+
+        lines = []
+        for i, (uid, xp, msgs, trans, vsec) in enumerate(rows, start=1):
+            level = level_from_xp(xp)
+            if i == 1:
+                rank = Z_NUM_1
+            elif i == 2:
+                rank = Z_NUM_2
+            elif i == 3:
+                rank = Z_NUM_3
+            else:
+                rank = f"#{i}"
+
+            member = interaction.guild.get_member(uid)
+            name = member.display_name if member else f"User {uid}"
+            lines.append(f"{rank} **{name}** — L{level} · {xp:,} XP · 🗨️ {msgs} · 🌐 {trans} · 🎙️ {vsec}s")
+
+        e = (discord.Embed(title="Leaderboard", description="\n".join(lines), color=COLOR)
+             .set_footer(text=_footer_text()))
+        await interaction.response.send_message(embed=e)
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(XPSystem(bot))
