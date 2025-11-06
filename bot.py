@@ -1,12 +1,11 @@
-# bot.py — Zephyra Main Entrypoint
-
+# bot.py
 import os
 import logging
+import asyncio
 import discord
 from discord.ext import commands
-from discord import app_commands
 
-from utils.brand import NAME, COLOR, footer_text
+from utils.brand import NAME, COLOR
 from utils import database
 
 logging.basicConfig(
@@ -15,80 +14,79 @@ logging.basicConfig(
 )
 log = logging.getLogger("zephyra.boot")
 
-TOKEN = os.getenv("DISCORD_TOKEN")
-if not TOKEN:
-    raise SystemExit("❌ DISCORD_TOKEN not set!")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+INTENTS = discord.Intents.default()
+INTENTS.message_content = True
+INTENTS.messages = True
+INTENTS.reactions = True
+INTENTS.guilds = True
+INTENTS.members = True  # for better caching on profiles/leaderboard
 
-# ==========================
-# Intents
-# ==========================
-intents = discord.Intents.default()
-intents.message_content = True
-intents.messages = True
-intents.reactions = True
-intents.guilds = True
-intents.members = True
-intents.dm_messages = True
-intents.voice_states = True  # ✅ Needed for XP voice rewards
+bot = commands.Bot(command_prefix="!", intents=INTENTS)
 
-# ==========================
-# Bot
-# ==========================
-class Zephyra(commands.Bot):
-    def __init__(self):
-        super().__init__(
-            command_prefix="!",
-            intents=intents,
-            activity=discord.Activity(
-                type=discord.ActivityType.watching,
-                name=f"/help • By Polarix1954"
-            ),
-        )
+COGS = [
+    "cogs.user_commands",
+    "cogs.admin_commands",
+    "cogs.translate",
+    "cogs.events",
+    "cogs.ops_commands",
+    "cogs.analytics_commands",
+    "cogs.invite_command",
+    "cogs.welcome",
+    "cogs.owner_commands",
+    "cogs.context_menu",
+    "cogs.xp_system",
+]
 
-    async def setup_hook(self):
-        log.info("🗃 Ensuring database tables exist...")
-        await database.ensure_tables()
-
-        EXTENSIONS = [
-            "cogs.user_commands",
-            "cogs.admin_commands",
-            "cogs.translate",
-            "cogs.events",
-            "cogs.ops_commands",
-            "cogs.analytics_commands",
-            "cogs.invite_command",
-            "cogs.welcome",
-            "cogs.owner_commands",
-            "cogs.context_menu",
-            "cogs.xp_system"
-        ]
-
-        for ext in EXTENSIONS:
-            try:
-                await self.load_extension(ext)
-                log.info(f"✅ Loaded {ext}")
-            except Exception as e:
-                log.error(f"❌ Failed to load {ext}: {e}")
-
-        await self.tree.sync()
-        log.info("🪄 Slash command sync complete.")
-
-    async def on_ready(self):
-        log.info(f"✅ Logged in as {self.user} ({self.user.id}) — {NAME}")
-
-        guild_count = len(self.guilds)
-        total_users = sum(g.member_count for g in self.guilds if g.member_count)
-
-        log.info(f"📊 Connected to {guild_count} servers with ~{total_users:,} users.")
-        print("────────────────────────────────────────")
-
-# ==========================
-# Run bot
-# ==========================
-if __name__ == "__main__":
-    log.info(f"🔧 Booting {NAME}")
-    bot = Zephyra()
+@bot.event
+async def on_ready():
+    log.info("✅ Logged in as %s (%s) — %s", bot.user, bot.user.id, NAME)
     try:
-        bot.run(TOKEN)
+        synced = await bot.tree.sync()
+        log.info("🪄 Slash command sync complete. %d commands registered.", len(synced))
     except Exception as e:
-        log.error(f"❌ Fatal error in bot.run(): {e}")
+        log.exception("Slash sync failed: %s", e)
+
+async def load_cogs():
+    for ext in COGS:
+        try:
+            await bot.load_extension(ext)
+            log.info("✅ Loaded %s", ext)
+        except Exception as e:
+            log.error("❌ Failed to load %s: %r", ext, e)
+
+async def main():
+    if not DISCORD_TOKEN:
+        print("❌ DISCORD_TOKEN not set!")
+        raise SystemExit(1)
+
+    log.info("🔧 Booting %s", NAME)
+
+    # Ensure DB schema (supports both names)
+    try:
+        if hasattr(database, "ensure_tables"):
+            await database.ensure_tables()
+        else:
+            await database.ensure_schema()
+        log.info("🗃 Ensuring database tables exist...")
+    except Exception as e:
+        log.error("❌ Fatal error preparing database: %s", e)
+        raise
+
+    await load_cogs()
+
+    # Presence
+    try:
+        await bot.change_presence(activity=discord.Game(name=f"{NAME} is online"))
+    except Exception:
+        pass
+
+    await bot.start(DISCORD_TOKEN)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except SystemExit:
+        pass
+    except Exception as e:
+        log.error("❌ Fatal error in bot.run(): %s", e)
