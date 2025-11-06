@@ -1,4 +1,4 @@
-import aiosqlite, os, datetime
+import aiosqlite, os
 
 DB_PATH = os.getenv("BOT_DB_PATH", "./bot_data.db")
 
@@ -12,8 +12,18 @@ async def init():
         await db.execute("""CREATE TABLE IF NOT EXISTS stats(
             guild_id INTEGER, user_id INTEGER, count INTEGER DEFAULT 0,
             PRIMARY KEY(guild_id, user_id))""")
+        # --- XP/Activity store ---
+        await db.execute("""CREATE TABLE IF NOT EXISTS xp(
+            guild_id INTEGER,
+            user_id  INTEGER,
+            xp INTEGER DEFAULT 0,
+            messages INTEGER DEFAULT 0,
+            translations INTEGER DEFAULT 0,
+            voice_seconds INTEGER DEFAULT 0,
+            PRIMARY KEY(guild_id, user_id))""")
         await db.commit()
 
+# ---------- language prefs ----------
 async def set_user_lang(uid:int, lang:str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("INSERT INTO user_lang(user_id,lang) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET lang=excluded.lang", (uid,lang))
@@ -36,6 +46,7 @@ async def get_server_lang(gid:int):
         r = await cur.fetchone()
         return r[0] if r else None
 
+# ---------- channels / error / emote ----------
 async def set_translation_channels(gid:int, channels:list[int]):
     s = ",".join(map(str, channels))
     async with aiosqlite.connect(DB_PATH) as db:
@@ -71,6 +82,7 @@ async def get_bot_emote(gid:int):
         r = await cur.fetchone()
         return r[0] if r else None
 
+# ---------- translation stats (legacy) ----------
 async def add_translation_stat(gid:int, uid:int, used_ai:bool=True, tokens_in:int=0, tokens_out:int=0):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""INSERT INTO stats(guild_id,user_id,count)
@@ -81,4 +93,35 @@ async def add_translation_stat(gid:int, uid:int, used_ai:bool=True, tokens_in:in
 async def get_leaderboard(gid:int, limit:int=10):
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT user_id, count FROM stats WHERE guild_id=? ORDER BY count DESC LIMIT ?", (gid, limit))
+        return await cur.fetchall()
+
+# ---------- XP system ----------
+async def _ensure_xp_row(db, gid:int, uid:int):
+    await db.execute("INSERT OR IGNORE INTO xp(guild_id,user_id) VALUES(?,?)", (gid, uid))
+
+async def add_activity(gid:int, uid:int, *, xp:int=0, messages:int=0, translations:int=0, voice_seconds:int=0):
+    """Generic accumulator; use from cogs."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_xp_row(db, gid, uid)
+        await db.execute("""UPDATE xp
+                            SET xp = xp + ?,
+                                messages = messages + ?,
+                                translations = translations + ?,
+                                voice_seconds = voice_seconds + ?
+                            WHERE guild_id=? AND user_id=?""",
+                         (xp, messages, translations, voice_seconds, gid, uid))
+        await db.commit()
+
+async def get_xp(gid:int, uid:int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT xp, messages, translations, voice_seconds FROM xp WHERE guild_id=? AND user_id=?", (gid, uid))
+        r = await cur.fetchone()
+        if not r: return (0,0,0,0)
+        return tuple(r)
+
+async def get_xp_leaderboard(gid:int, limit:int=10, offset:int=0):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("""SELECT user_id, xp, messages, translations, voice_seconds
+                                  FROM xp WHERE guild_id=? ORDER BY xp DESC LIMIT ? OFFSET ?""",
+                               (gid, limit, offset))
         return await cur.fetchall()
