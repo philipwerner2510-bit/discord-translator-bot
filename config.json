@@ -1,9 +1,0 @@
-{
-  "default_rate_limit": 5,
-  "reaction_timeout": 300,
-  "supported_langs": [
-    "en","zh","hi","es","fr","ar","bn","pt","ru","ja",
-    "de","jv","ko","vi","mr","ta","ur","tr","it","th",
-    "gu","kn","ml","pa","or","fa","sw","am","ha","yo"
-  ]
-}
