@@ -1,6 +1,7 @@
+# cogs/welcome.py
 import discord
 from discord.ext import commands
-from utils.brand import COLOR, WELCOME_TITLE, footer, Z_HAPPY
+from utils.brand import COLOR, WELCOME_TITLE, footer, Z_HAPPY, SERVER_BANNER_URL, AVATAR_URL
 
 WELCOME_DESC = (
     "Thanks for inviting **Zephyra**!\n\n"
@@ -18,10 +19,17 @@ class Welcome(commands.Cog):
     async def on_guild_join(self, guild: discord.Guild):
         embed = discord.Embed(title=f"{Z_HAPPY} {WELCOME_TITLE}", description=WELCOME_DESC, color=COLOR)
         embed.set_footer(text=footer())
+        if SERVER_BANNER_URL:
+            embed.set_image(url=SERVER_BANNER_URL)
+        if AVATAR_URL:
+            embed.set_thumbnail(url=AVATAR_URL)
+
         for ch in guild.text_channels:
-            if ch.permissions_for(guild.me).send_messages:
+            perms = ch.permissions_for(guild.me)
+            if perms.send_messages and perms.embed_links:
                 try:
                     await ch.send(embed=embed); break
-                except Exception: pass
+                except Exception:
+                    pass
 
 async def setup(bot): await bot.add_cog(Welcome(bot))
