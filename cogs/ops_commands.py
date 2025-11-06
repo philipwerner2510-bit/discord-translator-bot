@@ -28,9 +28,11 @@ class Ops(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.guild_only()
-    @app_commands.command(name="ping", description="Show latency.")
-    async def ping(self, interaction: discord.Interaction):
+    # create a command group so names don't collide with legacy globals
+    ops = app_commands.Group(name="ops", description="Operations utilities", guild_only=True)
+
+    @ops.command(name="ping", description="Show latency.")
+    async def ops_ping(self, interaction: discord.Interaction):
         t0 = time.perf_counter()
         await interaction.response.defer(ephemeral=True, thinking=True)
         rt = (time.perf_counter() - t0) * 1000
@@ -40,10 +42,9 @@ class Ops(commands.Cog):
              .set_footer(text=FOOTER))
         await interaction.followup.send(embed=e, ephemeral=True)
 
-    @app_commands.guild_only()
-    @app_commands.command(name="reload", description="Reload a cog or all cogs.")
+    @ops.command(name="reload", description="Reload a cog or all cogs.")
     @app_commands.describe(cog="Module path (e.g., cogs.translate) or 'all'")
-    async def reload(self, interaction: discord.Interaction, cog: str):
+    async def ops_reload(self, interaction: discord.Interaction, cog: str):
         await interaction.response.defer(ephemeral=True, thinking=True)
         count = 0
         errors = []
@@ -68,16 +69,13 @@ class Ops(commands.Cog):
         e.set_footer(text=FOOTER)
         await interaction.followup.send(embed=e, ephemeral=True)
 
-    @app_commands.guild_only()
-    @app_commands.command(name="selftest", description="Run a quick self test.")
-    async def selftest(self, interaction: discord.Interaction):
+    @ops.command(name="selftest", description="Run a quick self test.")
+    async def ops_selftest(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             await database.ensure_schema()
-            ok = True
             msg = "DB schema OK."
         except Exception as e:
-            ok = False
             msg = f"DB error: {e}"
 
         e = discord.Embed(color=COLOR, title="Self Test")
