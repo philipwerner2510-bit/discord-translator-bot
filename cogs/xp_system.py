@@ -1,5 +1,5 @@
 # cogs/xp_system.py
-# Simple XP system: message XP, /profile & /leaderboard
+# XP system: passive message XP + /xp profile + /xp leaderboard (namespaced to avoid conflicts)
 
 from __future__ import annotations
 
@@ -11,11 +11,14 @@ from discord import app_commands
 from utils import database
 from utils.brand import COLOR, footer_text, NAME
 
-LEADERBOARD_PAGE = 10  # entries per page
-XP_PER_MESSAGE = 1     # xp gain per non-bot message
+LEADERBOARD_PAGE = 10   # entries per page
+XP_PER_MESSAGE = 1      # xp per non-bot message
 
 
 class XPCog(commands.Cog):
+    # Make an app command group to avoid name clashes with other cogs
+    xp = app_commands.Group(name="xp", description="XP commands")
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
@@ -24,10 +27,8 @@ class XPCog(commands.Cog):
     # --------------------------
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # ignore bot + DMs
         if message.author.bot or not message.guild:
             return
-
         try:
             await database.add_xp(
                 guild_id=message.guild.id,
@@ -36,13 +37,13 @@ class XPCog(commands.Cog):
                 msg_inc=1,
             )
         except Exception as e:
-            # stay silent; XP is best-effort
             print(f"[xp] on_message failed in guild {message.guild.id}: {e}")
 
     # --------------------------
-    # /profile
+    # /xp profile
     # --------------------------
-    @app_commands.command(name="profile", description="Show your XP profile.")
+    @xp.command(name="profile", description="Show your XP profile.")
+    @app_commands.describe(user="Show profile for another member (optional)")
     async def xp_profile(self, interaction: discord.Interaction, user: Optional[discord.Member] = None):
         await interaction.response.defer(ephemeral=True)
         if not interaction.guild:
@@ -68,9 +69,9 @@ class XPCog(commands.Cog):
         await interaction.followup.send(embed=e, ephemeral=True)
 
     # --------------------------
-    # /leaderboard
+    # /xp leaderboard
     # --------------------------
-    @app_commands.command(name="leaderboard", description="Show the XP leaderboard for this server.")
+    @xp.command(name="leaderboard", description="Show the XP leaderboard for this server.")
     @app_commands.describe(page="Page number (starts at 1)")
     async def xp_leaderboard(self, interaction: discord.Interaction, page: Optional[int] = 1):
         await interaction.response.defer(ephemeral=True)
@@ -90,14 +91,12 @@ class XPCog(commands.Cog):
         start_rank = offset + 1
         for i, (user_id, xp, msgs, trans, vsec) in enumerate(rows, start=start_rank):
             user = interaction.guild.get_member(user_id) or self.bot.get_user(user_id)
-            # Prefer mention if member is present; otherwise fallback to <@id>
             if isinstance(user, discord.Member):
                 name = user.mention
             elif user is not None:
                 name = f"<@{user.id}>"
             else:
                 name = f"<@{user_id}>"
-
             lines.append(f"**{i}.** {name} — **{xp} XP** · {msgs} msgs · {trans} trans")
 
         e = discord.Embed(
