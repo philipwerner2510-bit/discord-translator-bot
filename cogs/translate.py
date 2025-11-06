@@ -17,6 +17,7 @@ except Exception:
 
 AI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
 TEXT_EXTS = {".txt", ".md", ".csv", ".log"}
 
@@ -54,6 +55,7 @@ class Translate(commands.Cog):
         if not OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY not set.")
         self.ai = OpenAI(api_key=OPENAI_API_KEY)
+        # guard set: (message_id, user_id) to prevent double-DM spam per message per user
         self.sent = set()
         self.cache = TranslationCache(ttl=300) if TranslationCache else None
 
@@ -93,7 +95,7 @@ class Translate(commands.Cog):
                 err.set_footer(text=footer())
                 await interaction.followup.send(embed=err, ephemeral=True)
 
-    # React to translate (adds reaction automatically)
+    # Auto-add reaction in configured channels
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -116,39 +118,45 @@ class Translate(commands.Cog):
             else:
                 print(f"[{gid}] Could not add unicode emote {emote} in #{message.channel.id}")
 
+    # Reaction → DM translate
     @commands.Cog.listener()
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
         if user.bot or not reaction.message.guild:
             return
+
         msg = reaction.message
         gid = msg.guild.id
+
+        # Only in configured channels
         allowed = await database.get_translation_channels(gid)
         if not allowed or msg.channel.id not in allowed:
             return
 
+        # Must match configured emote
         configured = normalize_emote_input(await database.get_bot_emote(gid) or "🔃")
         reacted = reaction_to_str(reaction.emoji)
         if not _same(configured, reacted):
             return
 
+        # Prevent duplicate DMs for same user+message
         key = (msg.id, user.id)
         if key in self.sent:
             return
         self.sent.add(key)
         asyncio.create_task(self._clear(key))
 
-        # Decide target language
+        # Target language (user → server → en)
         target = (await database.get_user_lang(user.id)) or (await database.get_server_lang(gid)) or "en"
         if target not in _lang_list():
             target = "en"
 
-        # DM loading + typing indicator
+        # Send DM "loading"
         loading = discord.Embed(description="Translating…", color=COLOR)
         loading.set_footer(text=footer())
         try:
             dm_msg = await user.send(embed=loading)
         except Exception:
-            # Can't DM—quietly ignore and remove user reaction to prevent loops
+            # Can't DM — keep bot reaction for others, remove ONLY user's reaction to prevent loops
             try:
                 await reaction.remove(user)
             except Exception:
@@ -156,13 +164,13 @@ class Translate(commands.Cog):
             return
 
         try:
-            # Collect content: raw text + simple embed descriptions + text attachments
+            # Gather translatable content: text + embed descriptions + small text attachments
             base_text = msg.content or ""
             embed_parts = [emb.description for emb in msg.embeds if getattr(emb, "description", None)]
             attach_parts = []
             for a in msg.attachments:
                 name = (a.filename or "").lower()
-                if any(name.endswith(ext) for ext in TEXT_EXTS) and a.size <= 2_000_000:  # 2 MB guard
+                if any(name.endswith(ext) for ext in TEXT_EXTS) and a.size <= 2_000_000:
                     try:
                         data = await a.read()
                         attach_parts.append(data.decode("utf-8", errors="replace"))
@@ -196,26 +204,9 @@ class Translate(commands.Cog):
             except Exception:
                 pass
 
-            # Cleanup: remove both the user's reaction and the bot's own reaction to keep threads clean
+            # Cleanup: remove ONLY the user's reaction so others can still click
             try:
                 await reaction.remove(user)
-            except Exception:
-                pass
-            try:
-                # Remove bot's own reaction (if present)
-                async for react in msg.reactions:
-                    pass  # placeholder to satisfy syntax highlighter
-            except Exception:
-                pass
-            # Better deterministic cleanup: remove the specific emoji the user clicked, from the bot as well
-            try:
-                # Find the matching reaction object
-                for r in msg.reactions:
-                    if _same(reaction_to_str(r.emoji), configured):
-                        async for u in r.users():
-                            if u.id == self.bot.user.id:
-                                await r.remove(u)
-                        break
             except Exception:
                 pass
 
