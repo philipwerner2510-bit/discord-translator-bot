@@ -1,287 +1,256 @@
 # utils/database.py
-# Full persistent database module for Zephyra ✅
-# Includes: XP system, language settings, AI settings, translation logging
-
-import aiosqlite
+# Persistent SQLite storage for Zephyra (messages, translations, voice, prefs, guild config)
 import os
-from datetime import datetime
+from typing import Optional, List, Tuple
+import aiosqlite
 
 DB_PATH = os.getenv("BOT_DB_PATH", "/mnt/data/bot_data.db")
 
-# -----------------------
-# DB Initialization
-# -----------------------
+# ---------- low-level helpers ----------
+async def _connect() -> aiosqlite.Connection:
+    db = await aiosqlite.connect(DB_PATH)
+    await db.execute("PRAGMA journal_mode=WAL;")
+    await db.execute("PRAGMA synchronous=NORMAL;")
+    await db.execute("PRAGMA foreign_keys=ON;")
+    return db
 
-async def ensure_tables():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("PRAGMA journal_mode=WAL;")
-        await db.execute("PRAGMA synchronous=NORMAL;")
+async def _exec(db: aiosqlite.Connection, sql: str, params: Tuple = ()) -> None:
+    cur = await db.execute(sql, params)
+    await cur.close()
 
-        # Language per user
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS user_lang (
-            user_id INTEGER PRIMARY KEY,
-            lang    TEXT NOT NULL
-        );
-        """)
+async def _one(db: aiosqlite.Connection, sql: str, params: Tuple = ()):
+    cur = await db.execute(sql, params)
+    row = await cur.fetchone()
+    await cur.close()
+    return row
 
-        # Language per guild
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS server_lang (
-            guild_id INTEGER PRIMARY KEY,
-            lang     TEXT NOT NULL
-        );
-        """)
+async def _all(db: aiosqlite.Connection, sql: str, params: Tuple = ()):
+    cur = await db.execute(sql, params)
+    rows = await cur.fetchall()
+    await cur.close()
+    return rows
 
-        # Translation-enabled channels (CSV list)
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS translation_channels (
-            guild_id   INTEGER PRIMARY KEY,
-            channels   TEXT NOT NULL
-        );
-        """)
+# ---------- schema ----------
+async def ensure_schema() -> None:
+    db = await _connect()
+    try:
+        # XP table
+        await _exec(
+            db,
+            """
+            CREATE TABLE IF NOT EXISTS xp (
+                guild_id     INTEGER NOT NULL,
+                user_id      INTEGER NOT NULL,
+                xp           INTEGER NOT NULL DEFAULT 0,
+                messages     INTEGER NOT NULL DEFAULT 0,
+                translations INTEGER NOT NULL DEFAULT 0,
+                voice_seconds INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id)
+            );
+            """
+        )
 
-        # Error log channels
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS error_channel (
-            guild_id   INTEGER PRIMARY KEY,
-            channel_id INTEGER NOT NULL
-        );
-        """)
+        # Guild settings (subset used by your translator)
+        await _exec(
+            db,
+            """
+            CREATE TABLE IF NOT EXISTS guild_settings (
+                guild_id INTEGER PRIMARY KEY,
+                target_lang TEXT,
+                translation_mode TEXT DEFAULT 'all', -- all|channels|disabled
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
 
-        # Custom emote per guild
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS bot_emote (
-            guild_id INTEGER PRIMARY KEY,
-            emote    TEXT NOT NULL
-        );
-        """)
+        # Channel allow-list for translations
+        await _exec(
+            db,
+            """
+            CREATE TABLE IF NOT EXISTS translate_channels (
+                guild_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, channel_id)
+            );
+            """
+        )
 
-        # XP + tracking
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS xp (
-            guild_id       INTEGER NOT NULL,
-            user_id        INTEGER NOT NULL,
-            xp             INTEGER NOT NULL DEFAULT 0,
-            messages       INTEGER NOT NULL DEFAULT 0,
-            translations   INTEGER NOT NULL DEFAULT 0,
-            voice_seconds  INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
-        );
-        """)
-
-        # Helpful indexes
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_xp_guild ON xp(guild_id);")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_xp_user ON xp(user_id);")
-
-        # AI usage tracking
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS ai_usage (
-            month   TEXT PRIMARY KEY,   -- 'YYYY-MM'
-            tokens  INTEGER NOT NULL DEFAULT 0,
-            eur     REAL    NOT NULL DEFAULT 0.0
-        );
-        """)
-
-        # AI feature settings per guild
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS ai_settings (
-            guild_id   INTEGER PRIMARY KEY,
-            ai_enabled INTEGER NOT NULL DEFAULT 1,
-            model      TEXT NOT NULL DEFAULT 'gpt-4o-mini'
-        );
-        """)
+        # User language preferences
+        await _exec(
+            db,
+            """
+            CREATE TABLE IF NOT EXISTS user_prefs (
+                user_id INTEGER PRIMARY KEY,
+                lang_code TEXT
+            );
+            """
+        )
 
         await db.commit()
+    finally:
+        await db.close()
 
+# ---------- XP mutators ----------
+async def _upsert_base(db: aiosqlite.Connection, gid: int, uid: int) -> None:
+    await _exec(
+        db,
+        """
+        INSERT INTO xp (guild_id, user_id) VALUES (?, ?)
+        ON CONFLICT(guild_id, user_id) DO NOTHING;
+        """,
+        (gid, uid),
+    )
 
-# -----------------------
-# Language Get / Set
-# -----------------------
-
-async def get_user_lang(user_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone("SELECT lang FROM user_lang WHERE user_id=?", (user_id,))
-        return row[0] if row else None
-
-async def set_user_lang(user_id, lang):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "REPLACE INTO user_lang (user_id, lang) VALUES (?, ?)",
-            (user_id, lang)
+async def add_message_xp(guild_id: int, user_id: int, delta_xp: int) -> None:
+    db = await _connect()
+    try:
+        await _upsert_base(db, guild_id, user_id)
+        await _exec(
+            db,
+            """
+            UPDATE xp
+               SET xp = xp + ?, messages = messages + 1
+             WHERE guild_id = ? AND user_id = ?;
+            """,
+            (max(0, int(delta_xp)), guild_id, user_id),
         )
         await db.commit()
+    finally:
+        await db.close()
 
-
-async def get_server_lang(guild_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone("SELECT lang FROM server_lang WHERE guild_id=?", (guild_id,))
-        return row[0] if row else None
-
-async def set_server_lang(guild_id, lang):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "REPLACE INTO server_lang (guild_id, lang) VALUES (?, ?)",
-            (guild_id, lang)
+async def add_translation_xp(guild_id: int, user_id: int, delta_xp: int) -> None:
+    db = await _connect()
+    try:
+        await _upsert_base(db, guild_id, user_id)
+        await _exec(
+            db,
+            """
+            UPDATE xp
+               SET xp = xp + ?, translations = translations + 1
+             WHERE guild_id = ? AND user_id = ?;
+            """,
+            (max(0, int(delta_xp)), guild_id, user_id),
         )
         await db.commit()
+    finally:
+        await db.close()
 
-
-# -----------------------
-# Translation Channels
-# -----------------------
-
-async def get_translation_channels(guild_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone(
-            "SELECT channels FROM translation_channels WHERE guild_id=?", (guild_id,)
-        )
-        if not row: return []
-        return [int(x) for x in row[0].split(",") if x]
-
-async def set_translation_channels(guild_id, channel_ids):
-    channels = ",".join(str(c) for c in channel_ids)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "REPLACE INTO translation_channels (guild_id, channels) VALUES (?, ?)",
-            (guild_id, channels)
+async def add_voice_seconds(guild_id: int, user_id: int, seconds: int) -> None:
+    if seconds <= 0:
+        return
+    db = await _connect()
+    try:
+        await _upsert_base(db, guild_id, user_id)
+        await _exec(
+            db,
+            """
+            UPDATE xp
+               SET voice_seconds = voice_seconds + ?
+             WHERE guild_id = ? AND user_id = ?;
+            """,
+            (int(seconds), guild_id, user_id),
         )
         await db.commit()
+    finally:
+        await db.close()
 
-
-# -----------------------
-# Error Channel
-# -----------------------
-
-async def get_error_channel(guild_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone(
-            "SELECT channel_id FROM error_channel WHERE guild_id=?", 
-            (guild_id,)
+# ---------- XP queries ----------
+async def get_xp(guild_id: int, user_id: int) -> Tuple[int, int, int, int]:
+    db = await _connect()
+    try:
+        row = await _one(
+            db,
+            """SELECT xp, messages, translations, voice_seconds
+                 FROM xp
+                WHERE guild_id = ? AND user_id = ?;""",
+            (guild_id, user_id),
         )
-        return row[0] if row else None
+        if not row:
+            return (0, 0, 0, 0)
+        return (int(row[0]), int(row[1]), int(row[2]), int(row[3]))
+    finally:
+        await db.close()
 
-async def set_error_channel(guild_id, channel_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        if channel_id is None:
-            await db.execute("DELETE FROM error_channel WHERE guild_id=?", (guild_id,))
-        else:
-            await db.execute(
-                "REPLACE INTO error_channel (guild_id, channel_id) VALUES (?, ?)",
-                (guild_id, channel_id)
-            )
-        await db.commit()
+LEADERBOARD_PAGE = 10
 
-
-# -----------------------
-# Custom Emote
-# -----------------------
-
-async def get_emote(guild_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone(
-            "SELECT emote FROM bot_emote WHERE guild_id=?", 
-            (guild_id,)
+async def get_xp_leaderboard(guild_id: int, limit: int = LEADERBOARD_PAGE, offset: int = 0):
+    db = await _connect()
+    try:
+        rows = await _all(
+            db,
+            """
+            SELECT user_id, xp, messages, translations, voice_seconds
+              FROM xp
+             WHERE guild_id = ?
+             ORDER BY xp DESC, messages DESC
+             LIMIT ? OFFSET ?;
+            """,
+            (guild_id, int(limit), int(offset)),
         )
-        return row[0] if row else None
-
-async def set_emote(guild_id, emote):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "REPLACE INTO bot_emote (guild_id, emote) VALUES (?, ?)",
-            (guild_id, emote)
-        )
-        await db.commit()
-
-
-# -----------------------
-# XP System
-# -----------------------
-
-async def add_xp(guild_id, user_id, amount=1, msg_inc=0, trans_inc=0, voice_inc=0):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        INSERT INTO xp (guild_id, user_id, xp, messages, translations, voice_seconds)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(guild_id, user_id) DO UPDATE SET
-            xp = xp + excluded.xp,
-            messages = messages + excluded.messages,
-            translations = translations + excluded.translations,
-            voice_seconds = voice_seconds + excluded.voice_seconds
-        """, (guild_id, user_id, amount, msg_inc, trans_inc, voice_inc))
-        await db.commit()
-
-async def get_xp(guild_id, user_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone("""
-        SELECT xp, messages, translations, voice_seconds 
-        FROM xp WHERE guild_id=? AND user_id=?""", 
-        (guild_id, user_id))
-        return row if row else (0, 0, 0, 0)
-
-async def get_xp_leaderboard(guild_id, limit, offset):
-    async with aiosqlite.connect(DB_PATH) as db:
-        rows = await db.execute_fetchall(f"""
-        SELECT user_id, xp, messages, translations, voice_seconds
-        FROM xp
-        WHERE guild_id=?
-        ORDER BY xp DESC
-        LIMIT {limit} OFFSET {offset}
-        """, (guild_id,))
         return rows
+    finally:
+        await db.close()
 
-
-# -----------------------
-# AI Usage
-# -----------------------
-
-def _current_month():
-    return datetime.utcnow().strftime("%Y-%m")
-
-async def add_ai_usage(tokens, eur):
-    async with aiosqlite.connect(DB_PATH) as db:
-        month = _current_month()
-        await db.execute("""
-        INSERT INTO ai_usage (month, tokens, eur)
-        VALUES (?, ?, ?)
-        ON CONFLICT(month) DO UPDATE SET
-            tokens = tokens + excluded.tokens,
-            eur = eur + excluded.eur;
-        """, (month, tokens, eur))
-        await db.commit()
-
-async def get_ai_usage():
-    async with aiosqlite.connect(DB_PATH) as db:
-        rows = await db.execute_fetchall("""
-        SELECT month, tokens, eur FROM ai_usage ORDER BY month DESC LIMIT 12;
-        """)
-        return rows
-
-
-# -----------------------
-# AI Settings
-# -----------------------
-
-async def set_ai_settings(guild_id, enabled=None, model=None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        current = await db.execute_fetchone("SELECT ai_enabled, model FROM ai_settings WHERE guild_id=?", (guild_id,))
-        ai_enabled, current_model = current if current else (1, "gpt-4o-mini")
-
-        if enabled is not None:
-            ai_enabled = 1 if enabled else 0
-        if model:
-            current_model = model
-
-        await db.execute("""
-        REPLACE INTO ai_settings (guild_id, ai_enabled, model)
-        VALUES (?, ?, ?)
-        """, (guild_id, ai_enabled, current_model))
-        await db.commit()
-
-async def get_ai_settings(guild_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchone(
-            "SELECT ai_enabled, model FROM ai_settings WHERE guild_id=?", 
-            (guild_id,)
+# ---------- Translation config (used by your translator cog) ----------
+async def get_translation_channels(guild_id: int) -> Optional[List[int]]:
+    db = await _connect()
+    try:
+        # If there are rows, we treat it as allow-list. If none, return None -> allow all.
+        rows = await _all(
+            db,
+            "SELECT channel_id FROM translate_channels WHERE guild_id = ?;",
+            (guild_id,),
         )
-        return row if row else (1, "gpt-4o-mini")
+        if not rows:
+            return None
+        return [int(r[0]) for r in rows]
+    finally:
+        await db.close()
+
+async def allow_translation_channel(guild_id: int, channel_id: int) -> None:
+    db = await _connect()
+    try:
+        await _exec(
+            db,
+            "INSERT OR IGNORE INTO translate_channels (guild_id, channel_id) VALUES (?, ?);",
+            (guild_id, channel_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+async def remove_translation_channel(guild_id: int, channel_id: int) -> None:
+    db = await _connect()
+    try:
+        await _exec(
+            db,
+            "DELETE FROM translate_channels WHERE guild_id = ? AND channel_id = ?;",
+            (guild_id, channel_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+# ---------- User prefs ----------
+async def set_user_lang(user_id: int, code: str) -> None:
+    db = await _connect()
+    try:
+        await _exec(
+            db,
+            """
+            INSERT INTO user_prefs (user_id, lang_code) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET lang_code = excluded.lang_code;
+            """,
+            (user_id, code),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+async def get_user_lang(user_id: int) -> Optional[str]:
+    db = await _connect()
+    try:
+        row = await _one(db, "SELECT lang_code FROM user_prefs WHERE user_id = ?;", (user_id,))
+        return row[0] if row else None
+    finally:
+        await db.close()
