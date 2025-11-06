@@ -1,68 +1,62 @@
-# cogs/owner_commands.py
-from __future__ import annotations
-
 import discord
-from discord import app_commands
 from discord.ext import commands
+from discord import app_commands
+from utils.brand import COLOR, footer_text
 
-from utils.brand import ACCENT, NAME, FOOTER_DEV
+OWNER_ID = 762267166031609858  # <- Your ID
 
 
-def is_owner():
-    async def predicate(interaction: discord.Interaction) -> bool:
-        app_info = await interaction.client.application_info()
-        return interaction.user.id == app_info.owner.id
-    return app_commands.check(predicate)
+def owner_only(interaction: discord.Interaction):
+    return interaction.user.id == OWNER_ID
 
 
 class Owner(commands.Cog):
-    """Owner-only utilities (namespaced under /owner)."""
-
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot):
         self.bot = bot
 
-    owner = app_commands.Group(
-        name="owner",
-        description="Owner-only utilities",
-        guild_only=False,
-    )
-
-    @owner.command(name="guilds", description="List the guilds this bot is in.")
-    @is_owner()
-    async def owner_guilds(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
-
-        guilds = sorted(self.bot.guilds, key=lambda g: g.member_count or 0, reverse=True)
-        lines = [f"• **{g.name}** — {g.member_count or 0} members (ID `{g.id}`)" for g in guilds[:25]]
-        if not lines:
-            lines = ["No guilds found."]
-
+    @app_commands.check(owner_only)
+    @app_commands.command(name="owner", description="Owner utilities for Zephyra.")
+    async def owner_group(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="Owner • Guilds",
-            description="\n".join(lines),
-            color=ACCENT,
-        ).set_author(name=NAME)
-        embed.set_footer(text=FOOTER_DEV)
-        await interaction.followup.send(embed=embed, ephemeral=True)
+            title="👑 Owner Panel",
+            description="Private system utilities",
+            color=COLOR,
+        )
+        embed.set_footer(text=footer_text())
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # Renamed from /stats to avoid collisions with analytics_commands
-    @owner.command(name="ownerstats", description="Bot stats (owner view).")
-    @is_owner()
-    async def owner_stats(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
+    @owner_group.command(name="reload", description="Reload bot extensions / cogs.")
+    async def reload_cmd(self, interaction: discord.Interaction):
+        failures = []
+        for ext in list(self.bot.extensions.keys()):
+            try:
+                await self.bot.reload_extension(ext)
+            except Exception:
+                failures.append(ext)
 
-        gcount = len(self.bot.guilds)
-        ucount = sum(g.member_count or 0 for g in self.bot.guilds)
+        txt = (
+            "🔄 Reload complete.\n"
+            + (f"❌ Failed: {', '.join(failures)}" if failures else "✅ All cogs reloaded")
+        )
+        await interaction.response.send_message(txt, ephemeral=True)
 
+    @owner_group.command(name="stats", description="Bot uptime and command count.")
+    async def stats_cmd(self, interaction: discord.Interaction):
+        cmds = len(self.bot.tree.get_commands())
         embed = discord.Embed(
-            title="Owner • Stats",
-            description=f"Servers: **{gcount}**\nUsers (approx): **{ucount:,}**",
-            color=ACCENT,
-        ).set_author(name=NAME)
-        embed.set_footer(text=FOOTER_DEV)
-        await interaction.followup.send(embed=embed, ephemeral=True)
+            title="📊 Zephyra Stats",
+            description=f"Registered commands: **{cmds}**",
+            color=COLOR,
+        )
+        embed.set_footer(text=footer_text())
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Owner(bot))
-    bot.tree.add_command(Owner.owner)
+    cog = Owner(bot)
+    await bot.add_cog(cog)
+
+    # ✅ Prevent CommandAlreadyRegistered
+    existing = {cmd.name for cmd in bot.tree.get_commands()}
+    if "owner" not in existing:
+        bot.tree.add_command(cog.owner_group)
