@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from openai import OpenAI
+
 from utils.brand import COLOR, footer, Z_CONFUSED, Z_SAD, FOOTER_TRANSLATED
 from utils import database
 from utils.language_data import SUPPORTED_LANGUAGES, label, codes
@@ -15,8 +16,10 @@ try:
 except Exception:
     TranslationCache = None
 
+# ===== Config =====
 AI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TRANSLATION_XP = 10  # XP per successful translation (manual or reaction)
 
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
 TEXT_EXTS = {".txt", ".md", ".csv", ".log"}
@@ -59,7 +62,7 @@ class Translate(commands.Cog):
         self.sent = set()
         self.cache = TranslationCache(ttl=300) if TranslationCache else None
 
-    # /translate (manual)
+    # ========== /translate (manual) ==========
     @app_commands.guild_only()
     @app_commands.command(name="translate", description="Translate specific text with AI.")
     @app_commands.describe(text="Text to translate", target_lang="Target language (code)")
@@ -76,6 +79,7 @@ class Translate(commands.Cog):
         async with interaction.channel.typing():
             try:
                 translated, detected = await self.ai_translate(text, target_lang)
+
                 embed = discord.Embed(
                     title=f"{label(detected)} → {label(target_lang)}",
                     description=translated,
@@ -84,10 +88,13 @@ class Translate(commands.Cog):
                 embed.set_footer(text=FOOTER_TRANSLATED)
                 await interaction.channel.send(embed=embed)
 
+                # award XP for manual translation
                 try:
-                    await database.add_translation_stat(interaction.guild.id, interaction.user.id)
+                    await database.add_activity(interaction.guild.id, interaction.user.id,
+                                                xp=TRANSLATION_XP, translations=1)
                 except Exception:
                     pass
+
             except Exception as e:
                 await log_error(self.bot, interaction.guild.id if interaction.guild else 0,
                                 f"Manual /translate failed: {e}", e, admin_notify=True)
@@ -95,7 +102,7 @@ class Translate(commands.Cog):
                 err.set_footer(text=footer())
                 await interaction.followup.send(embed=err, ephemeral=True)
 
-    # Auto-add reaction in configured channels
+    # ========== Auto-add reaction in configured channels ==========
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -104,6 +111,7 @@ class Translate(commands.Cog):
         allowed = await database.get_translation_channels(gid)
         if not allowed or message.channel.id not in allowed:
             return
+
         emote = normalize_emote_input(await database.get_bot_emote(gid) or "🔃")
         try:
             await message.add_reaction(emote)
@@ -118,8 +126,8 @@ class Translate(commands.Cog):
             else:
                 print(f"[{gid}] Could not add unicode emote {emote} in #{message.channel.id}")
 
-    # Reaction → DM translate
-    @commands.Cog.listener()
+    # ========== Reaction → DM translate ==========
+    @commands.Cog.listener())
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
         if user.bot or not reaction.message.guild:
             return
@@ -198,9 +206,9 @@ class Translate(commands.Cog):
 
             await dm_msg.edit(embed=embed, view=view)
 
-            # persistent stats
+            # award XP for reaction-based translation
             try:
-                await database.add_translation_stat(gid, user.id)
+                await database.add_activity(gid, user.id, xp=TRANSLATION_XP, translations=1)
             except Exception:
                 pass
 
@@ -219,6 +227,7 @@ class Translate(commands.Cog):
             except Exception:
                 pass
 
+    # ========== helpers ==========
     async def _clear(self, key, delay: int = 300):
         await asyncio.sleep(delay)
         self.sent.discard(key)
