@@ -1,97 +1,89 @@
 # cogs/ops_commands.py
-from __future__ import annotations
-
+import time
+import importlib
 import discord
-from discord import app_commands
 from discord.ext import commands
-from utils.brand import ACCENT, NAME, footer_text
+from discord import app_commands
 
+from utils.brand import COLOR, NAME
+from utils import database
+
+FOOTER = f"{NAME} — Developed by Polarix1954"
+
+OPS_COGS = [
+    "cogs.user_commands",
+    "cogs.admin_commands",
+    "cogs.translate",
+    "cogs.events",
+    "cogs.ops_commands",
+    "cogs.analytics_commands",
+    "cogs.invite_command",
+    "cogs.welcome",
+    "cogs.owner_commands",
+    "cogs.context_menu",
+    "cogs.xp_system",
+]
 
 class Ops(commands.Cog):
-    """Operational & diagnostic tools (under /ops)."""
-
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot):
         self.bot = bot
 
-    # Namespaced group (prevents collisions with /settings etc.)
-    ops = app_commands.Group(
-        name="ops",
-        description="Operational & diagnostic tools",
-        guild_only=False,
-    )
-
-    @ops.command(name="ping", description="Latency check (gateway & REST).")
+    @app_commands.guild_only()
+    @app_commands.command(name="ping", description="Show latency.")
     async def ping(self, interaction: discord.Interaction):
+        t0 = time.perf_counter()
         await interaction.response.defer(ephemeral=True, thinking=True)
-        gateway_ms = round(self.bot.latency * 1000)
-        msg = await interaction.followup.send("Measuring REST…", ephemeral=True, wait=True)
-        rest_ms = (msg.created_at - interaction.created_at).total_seconds() * 1000
+        rt = (time.perf_counter() - t0) * 1000
+        e = (discord.Embed(color=COLOR, title="Pong!")
+             .add_field(name="Gateway", value=f"{round(self.bot.latency*1000)} ms")
+             .add_field(name="Roundtrip", value=f"{rt:.1f} ms")
+             .set_footer(text=FOOTER))
+        await interaction.followup.send(embed=e, ephemeral=True)
 
-        embed = (
-            discord.Embed(
-                title="Ops • Ping",
-                description=f"🛰️ Gateway: **{gateway_ms} ms**\n🌐 REST: **{rest_ms:.0f} ms**",
-                color=ACCENT,
-            )
-            .set_author(name=NAME)
-            .set_footer(text=footer_text())
-        )
-        await msg.edit(content=None, embed=embed)
-
-    @ops.command(name="sync", description="Resync slash commands.")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def sync(self, interaction: discord.Interaction):
+    @app_commands.guild_only()
+    @app_commands.command(name="reload", description="Reload a cog or all cogs.")
+    @app_commands.describe(cog="Module path (e.g., cogs.translate) or 'all'")
+    async def reload(self, interaction: discord.Interaction, cog: str):
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await self.bot.tree.sync()
-        await interaction.followup.send("✅ Slash commands synced.", ephemeral=True)
+        count = 0
+        errors = []
 
-    @ops.command(name="reload", description="Hot-reload all loaded cogs.")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def reload(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        failed: list[str] = []
-        reloaded: list[str] = []
-        for ext in list(self.bot.extensions.keys()):
+        targets = OPS_COGS if cog.lower() == "all" else [cog]
+        for ext in targets:
             try:
-                await self.bot.reload_extension(ext)
-                reloaded.append(ext)
-            except Exception:
-                failed.append(ext)
+                importlib.invalidate_caches()
+                try:
+                    await self.bot.unload_extension(ext)
+                except Exception:
+                    pass
+                await self.bot.load_extension(ext)
+                count += 1
+            except Exception as e:
+                errors.append(f"`{ext}` → `{e}`")
 
-        desc = []
-        if reloaded:
-            desc.append("✅ **Reloaded**\n" + "\n".join(f"• `{e}`" for e in reloaded))
-        if failed:
-            desc.append("\n❌ **Failed**\n" + "\n".join(f"• `{e}`" for e in failed))
-        if not desc:
-            desc.append("No extensions to reload.")
+        e = discord.Embed(color=COLOR, title="Reload")
+        e.description = f"Reloaded **{count}** modules."
+        if errors:
+            e.add_field(name="Errors", value="\n".join(errors), inline=False)
+        e.set_footer(text=FOOTER)
+        await interaction.followup.send(embed=e, ephemeral=True)
 
-        embed = (
-            discord.Embed(title="Ops • Reload", description="\n".join(desc), color=ACCENT)
-            .set_author(name=NAME)
-            .set_footer(text=footer_text())
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    @ops.command(name="selftest", description="Run a short health check.")
+    @app_commands.guild_only()
+    @app_commands.command(name="selftest", description="Run a quick self test.")
     async def selftest(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
-        checks = [
-            ("Gateway connected", True),
-            ("Command tree registered", bool(self.bot.tree.get_commands())),
-            ("Intents.message_content", self.bot.intents.message_content),
-        ]
-        lines = [f"{'✅' if ok else '❌'} {label}" for label, ok in checks]
-        embed = (
-            discord.Embed(title="Ops • Self-test", description="\n".join(lines), color=ACCENT)
-            .set_author(name=NAME)
-            .set_footer(text=footer_text())
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        try:
+            await database.ensure_schema()
+            ok = True
+            msg = "DB schema OK."
+        except Exception as e:
+            ok = False
+            msg = f"DB error: {e}"
 
+        e = discord.Embed(color=COLOR, title="Self Test")
+        e.description = f"**{msg}**"
+        e.set_footer(text=FOOTER)
+        await interaction.followup.send(embed=e, ephemeral=True)
 
-async def setup(bot: commands.Bot):
+async def setup(bot):
     await bot.add_cog(Ops(bot))
-    # Guard to avoid CommandAlreadyRegistered on reload:
-    if not any(cmd.name == "ops" for cmd in bot.tree.get_commands()):
-        bot.tree.add_command(Ops.ops)
