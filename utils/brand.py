@@ -21,7 +21,7 @@ SERVER_BANNER = "https://cdn.discordapp.com/attachments/1435845031817904248/1435
 PROFILE_IMAGE_URL  = PROFILE_IMAGE
 SERVER_BANNER_URL  = SERVER_BANNER
 BOT_BANNER_URL     = SERVER_BANNER  # same banner asset as server
-
+AVATAR_URL    =PROFILE_IMAGE
 # --- Footer text
 FOOTER_DEV = "Zephyra — Developed by Polarix1954"
 footer = FOOTER_DEV
