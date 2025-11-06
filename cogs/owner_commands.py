@@ -46,4 +46,23 @@ class Owner(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # Renamed from /stats to avoid collisions with analytics_commands
-    @owner.command(name="owner
+    @owner.command(name="ownerstats", description="Bot stats (owner view).")
+    @is_owner()
+    async def owner_stats(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        gcount = len(self.bot.guilds)
+        ucount = sum(g.member_count or 0 for g in self.bot.guilds)
+
+        embed = discord.Embed(
+            title="Owner • Stats",
+            description=f"Servers: **{gcount}**\nUsers (approx): **{ucount:,}**",
+            color=ACCENT,
+        ).set_author(name=NAME)
+        embed.set_footer(text=FOOTER_DEV)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Owner(bot))
+    bot.tree.add_command(Owner.owner)
