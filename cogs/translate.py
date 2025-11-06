@@ -9,6 +9,7 @@ from utils.brand import COLOR, footer, Z_CONFUSED, Z_SAD, FOOTER_TRANSLATED
 from utils import database
 from utils.language_data import SUPPORTED_LANGUAGES, label
 from utils.logging_utils import log_error
+from utils.config import XP_TRANSLATION  # <- use your global XP constant
 
 # optional in-memory cache
 try:
@@ -19,7 +20,6 @@ except Exception:
 # ===== Config =====
 AI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-TRANSLATION_XP = 9  # balanced vs messages
 
 CUSTOM_EMOJI_RE = re.compile(r"<(a?):([a-zA-Z0-9_]+):(\d+)>")
 TEXT_EXTS = {".txt", ".md", ".csv", ".log"}
@@ -88,13 +88,15 @@ class Translate(commands.Cog):
                 embed.set_footer(text=FOOTER_TRANSLATED)
                 await interaction.channel.send(embed=embed)
 
-                # XP & immediate role check
+                # ✅ XP for successful manual translation
                 try:
-                    await database.add_activity(interaction.guild.id, interaction.user.id,
-                                                xp=TRANSLATION_XP, translations=1)
+                    await database.add_activity(
+                        interaction.guild.id, interaction.user.id,
+                        xp=XP_TRANSLATION, translations=1
+                    )
                 except Exception:
                     pass
-                # notify xp_system to update roles
+                # notify xp_system to update roles immediately
                 self.bot.dispatch("xp_gain", interaction.guild.id, interaction.user.id)
 
             except Exception as e:
@@ -201,9 +203,9 @@ class Translate(commands.Cog):
 
             await dm_msg.edit(embed=embed, view=view)
 
-            # XP & immediate role check
+            # ✅ XP for successful reaction translation
             try:
-                await database.add_activity(gid, user.id, xp=TRANSLATION_XP, translations=1)
+                await database.add_activity(gid, user.id, xp=XP_TRANSLATION, translations=1)
             except Exception:
                 pass
             self.bot.dispatch("xp_gain", gid, user.id)
