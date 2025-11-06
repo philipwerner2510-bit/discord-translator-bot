@@ -1,117 +1,107 @@
 # cogs/xp_system.py
-# Pretty /profile with avatar + XP progress bar sized for mobile
-
+# Profile & Leaderboard with level system, avatar & medals.
 import math
-from typing import Optional
-
 import discord
 from discord.ext import commands
 from discord import app_commands
 
+from utils.brand import (
+    COLOR, ACCENT, PROFILE_TITLE, LEADERBOARD_TITLE,
+    MEDAL_1, MEDAL_2, MEDAL_3, medal_for_rank, footer
+)
 from utils import database
-from utils.brand import COLOR, footer_text, Z_HAPPY, NAME
 
-# Mobile-friendly width (was 22, now 17 = 5 fewer cells)
-BAR_WIDTH = 17
+# Tunable XP values (keep aligned with your other cogs)
+XP_PER_MESSAGE = 5
 
-# ------ Leveling curve helpers ------
-
-def level_from_xp(total_xp: int) -> int:
-    """
-    Smooth curve:
-      xp_to_reach_level(n) = 100 * n^1.5  (rounded)
-    Invert to get level from total_xp.
-    """
-    if total_xp <= 0:
-        return 0
-    n = (max(0, total_xp) / 100.0) ** (2.0 / 3.0)
-    return int(n)
-
-def xp_for_level(level: int) -> int:
-    """XP required to REACH this level (cumulative)."""
-    if level <= 0:
-        return 0
-    return int(round(100.0 * (level ** 1.5)))
-
-def xp_to_next_level(total_xp: int) -> tuple[int, int, int]:
-    """
-    Returns (current_level, xp_into_level, xp_needed_for_levelup)
-    """
-    lvl = level_from_xp(total_xp)
-    base = xp_for_level(lvl)
-    nxt  = xp_for_level(lvl + 1)
-    into = total_xp - base
-    need = max(1, nxt - base)
-    return lvl, max(0, into), need
-
-def make_progress_bar(into: int, need: int, width: int = BAR_WIDTH) -> str:
-    """
-    Text progress bar suitable for embeds.
-    Uses block characters for readability at small sizes.
-    """
-    ratio = 0 if need <= 0 else max(0.0, min(1.0, into / need))
+def progress_bar(curr: int, need: int, width: int = 10) -> str:
+    if need <= 0:
+        return "■" * width
+    ratio = max(0.0, min(1.0, curr / need))
     filled = int(round(ratio * width))
-    empty  = max(0, width - filled)
-    return "▰" * filled + "▱" * empty
-
-# ------ Cog ------
+    return "■" * filled + "□" * (width - filled)
 
 class XpSystem(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="profile", description="Show a user's XP profile (level, progress, stats).")
-    @app_commands.describe(user="Whose profile to view (optional).")
-    async def xp_profile(self, interaction: discord.Interaction, user: Optional[discord.Member] = None):
-        member = user or interaction.user
-        gid = interaction.guild.id if interaction.guild else 0
-
-        # Fetch XP stats
-        xp, msgs, trans, vsec = await database.get_xp(gid, member.id)
-
-        # Level math
-        lvl, into, need = xp_to_next_level(xp)
-        bar = make_progress_bar(into, need, width=BAR_WIDTH)
-        pct = 0 if need == 0 else int((into / need) * 100)
-
-        # Build embed
-        e = discord.Embed(
-            title=f"{Z_HAPPY} {member.display_name}'s Profile",
-            description=(
-                f"**Level:** `{lvl}`\n"
-                f"**XP:** `{xp}`  •  **Next:** `{into}/{need}`  (**{pct}%**)\n"
-                f"```\n{bar}\n```"
-            ),
-            color=COLOR,
-        )
-        try:
-            e.set_thumbnail(url=member.display_avatar.url)
-        except Exception:
-            pass
-
-        # Stats fields
-        e.add_field(name="Messages", value=f"`{msgs}`", inline=True)
-        e.add_field(name="Translations", value=f"`{trans}`", inline=True)
-
-        hours = vsec // 3600
-        mins  = (vsec % 3600) // 60
-        e.add_field(name="Voice Time", value=f"`{hours}h {mins}m`", inline=True)
-
-        e.set_footer(text=footer_text())
-
-        await interaction.response.send_message(embed=e, ephemeral=False)
-
+    # Optional central message XP hook (enable if you want this cog to give message XP)
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if not message.guild or message.author.bot:
+        if message.author.bot or not message.guild:
             return
-        if len(message.content.strip()) < 2:
-            return
-        try:
-            await database.add_message_xp(message.guild.id, message.author.id, delta_xp=3)
-            self.bot.dispatch("xp_gain", message.guild.id, message.author.id)
-        except Exception:
-            pass
+        # award small XP for any non-empty content
+        if message.content and message.content.strip():
+            try:
+                await database.add_message_xp(message.guild.id, message.author.id, XP_PER_MESSAGE)
+                # Let others (roles, etc.) react if you want: self.bot.dispatch("xp_gain", ...)
+            except Exception:
+                pass
 
-async def setup(bot: commands.Bot):
+    # /profile
+    @app_commands.command(name="profile", description="Show your Zephyra profile & level.")
+    @app_commands.describe(member="User to inspect (default: you)")
+    async def xp_profile(self, interaction: discord.Interaction, member: discord.Member = None):
+        member = member or interaction.user
+        gid = interaction.guild.id
+
+        xp, msgs, trans, vsec = await database.get_xp(gid, member.id)
+        lvl, into, need = database.level_from_xp(xp)
+        bar = progress_bar(into, need, width=10)
+
+        e = discord.Embed(
+            title=f"{PROFILE_TITLE}",
+            description=(
+                f"**Level {lvl}**\n"
+                f"XP: **{xp:,}**\n"
+                f"`{bar}`  **{into}/{need}** to next level\n\n"
+                f"• Messages: **{msgs:,}**\n"
+                f"• Translations: **{trans:,}**\n"
+                f"• Voice: **{vsec:,}s**"
+            ),
+            color=COLOR
+        )
+        # user avatar
+        if member.display_avatar:
+            e.set_thumbnail(url=member.display_avatar.url)
+        e.set_footer(text=footer())
+        await interaction.response.send_message(embed=e)
+
+    # /leaderboard
+    @app_commands.command(name="leaderboard", description="Top users by XP in this server.")
+    @app_commands.describe(page="Page number (starts at 1)")
+    async def xp_leaderboard(self, interaction: discord.Interaction, page: int = 1):
+        gid = interaction.guild.id
+        page = max(1, page)
+        limit = database.LEADERBOARD_PAGE
+        offset = (page - 1) * limit
+
+        rows = await database.get_xp_leaderboard(gid, limit=limit, offset=offset)
+
+        if not rows:
+            return await interaction.response.send_message(
+                embed=discord.Embed(description="No data yet. Start chatting!", color=COLOR).set_footer(text=footer())
+            )
+
+        lines = []
+        for i, (uid, xp, msgs, trans, vsec) in enumerate(rows, start=offset + 1):
+            lvl, _, _ = database.level_from_xp(int(xp))
+            try:
+                user = interaction.guild.get_member(int(uid)) or await interaction.guild.fetch_member(int(uid))
+                name = user.display_name
+            except Exception:
+                name = f"User {uid}"
+
+            medal = medal_for_rank(i) if i <= 3 else f"#{i}"
+            lines.append(f"{medal} **{name}** — LVL **{lvl}** · XP **{int(xp):,}**")
+
+        e = discord.Embed(
+            title=LEADERBOARD_TITLE,
+            description="\n".join(lines),
+            color=COLOR
+        )
+        e.set_footer(text=f"{footer()} • Page {page}")
+        await interaction.response.send_message(embed=e)
+
+async def setup(bot):
     await bot.add_cog(XpSystem(bot))
