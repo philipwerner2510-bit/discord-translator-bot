@@ -1,6 +1,9 @@
-# cogs/welcome.py (add near top)
-from utils.roles import role_ladder
+import discord
+from discord.ext import commands
+from discord import app_commands
 
+from utils.brand import COLOR, footer_text, NAME, SERVER_BANNER_URL, AVATAR_URL
+from utils.roles import role_ladder, gradient_color
 # ... inside the cog class:
 
 async def _ensure_role(self, guild: discord.Guild, name: str, color_int: int):
