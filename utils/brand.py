@@ -1,5 +1,5 @@
 # utils/brand.py
-# — Centralized branding for Zephyra (backward-compatible) —
+# — Centralized branding for Zephyra (full, updated) —
 
 # ===== Names & Titles =====
 NAME = "Zephyra"
@@ -19,13 +19,10 @@ PURPLE  = 0x9B5CFF          # secondary accent if needed
 FOOTER_DEV = f"{NAME} — Developed by Polarix1954"
 
 def footer(*_args, **_kwargs) -> str:
-    """
-    Backward-compatible helper some cogs import as a function.
-    We no longer put emojis in footers (Discord won’t render custom ones in footers).
-    """
+    """Discord doesn't render custom emojis in footers."""
     return FOOTER_DEV
 
-# ===== Custom emojis (uploaded to your app/user) =====
+# ===== Custom emojis (raw markup) =====
 EMOJI = {
     "base":     "<:Zephyra:1435530499408924672>",
     "angry":    "<:Zephyra_angry:1435525299692372051>",
@@ -39,5 +36,15 @@ EMOJI = {
 }
 
 def e(key: str, fallback: str = "") -> str:
-    """Return a custom emoji string by key, or fallback if missing."""
+    """Return a custom emoji string by key, fallback if missing."""
     return EMOJI.get(key, fallback)
+
+# ===== Backwards-compat emoji constants =====
+Z_EXCITED  = e("excited")
+Z_TIRED    = e("tired")
+Z_CONFUSED = e("confused")
+Z_SAD      = e("sad")
+Z_HAPPY    = e("happy")
+Z_LOVE     = e("love")
+Z_ANGRY    = e("angry")
+Z_BASE     = e("base")
