@@ -1,7 +1,8 @@
+# cogs/invite_command.py
 import discord
 from discord.ext import commands
 from discord import app_commands
-from utils.brand import COLOR, INVITE_TITLE, footer, Z_EXCITED
+from utils.brand import COLOR, INVITE_TITLE, footer, Z_EXCITED, BOT_BANNER_URL
 
 MIN_PERMS = 1024 + 2048 + 64 + 8192 + 16384 + 65536 + 262144
 ADMIN_PERMS = 8
@@ -17,8 +18,13 @@ class Invite(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         app_id = interaction.client.user.id
         url_min = link(app_id, MIN_PERMS); url_admin = link(app_id, ADMIN_PERMS)
-        e = discord.Embed(title=f"{Z_EXCITED} {INVITE_TITLE}", color=COLOR,
-                          description="Choose your invite style below.")
+        e = discord.Embed(
+            title=f"{Z_EXCITED} {INVITE_TITLE}",
+            color=COLOR,
+            description="Choose how you want to add **Zephyra** to your server."
+        )
+        if BOT_BANNER_URL:
+            e.set_image(url=BOT_BANNER_URL)
         e.set_footer(text=footer())
         v = discord.ui.View()
         v.add_item(discord.ui.Button(label="Invite (Recommended)", style=discord.ButtonStyle.link, url=url_min))
