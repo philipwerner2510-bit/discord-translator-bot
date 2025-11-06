@@ -46,6 +46,7 @@ EXTS = [
     "cogs.welcome",
     "cogs.owner_commands",
     "cogs.context_menu",
+    "cogs.xp_system",
 ]
 
 _synced_once = False  # one-time global sync guard
