@@ -21,7 +21,7 @@ class Owner(commands.Cog):
         guild_only=False,
     )
 
-    @owner.command(name="guilds", description="List the guilds this bot is in.")
+    @owner.command(name="guilds", description="List guilds where bot is installed.")
     @is_owner()
     async def owner_guilds(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True, ephemeral=True)
@@ -31,8 +31,7 @@ class Owner(commands.Cog):
         embed.set_author(name=NAME)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    # Renamed from /stats to avoid collision with analytics_commands
-    @owner.command(name="ownerstats", description="Bot stats (owner view).")
+    @owner.command(name="stats", description="Bot stats (owner view).")
     @is_owner()
     async def owner_stats(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True, ephemeral=True)
@@ -47,4 +46,3 @@ class Owner(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Owner(bot))
-    bot.tree.add_command(Owner.owner)
