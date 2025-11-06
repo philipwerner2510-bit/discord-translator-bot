@@ -39,18 +39,18 @@ async def ensure_schema() -> None:
             db,
             """
             CREATE TABLE IF NOT EXISTS xp (
-                guild_id     INTEGER NOT NULL,
-                user_id      INTEGER NOT NULL,
-                xp           INTEGER NOT NULL DEFAULT 0,
-                messages     INTEGER NOT NULL DEFAULT 0,
-                translations INTEGER NOT NULL DEFAULT 0,
+                guild_id      INTEGER NOT NULL,
+                user_id       INTEGER NOT NULL,
+                xp            INTEGER NOT NULL DEFAULT 0,
+                messages      INTEGER NOT NULL DEFAULT 0,
+                translations  INTEGER NOT NULL DEFAULT 0,
                 voice_seconds INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (guild_id, user_id)
             );
             """
         )
 
-        # Guild settings (subset used by your translator)
+        # Guild settings
         await _exec(
             db,
             """
@@ -68,7 +68,7 @@ async def ensure_schema() -> None:
             db,
             """
             CREATE TABLE IF NOT EXISTS translate_channels (
-                guild_id INTEGER NOT NULL,
+                guild_id  INTEGER NOT NULL,
                 channel_id INTEGER NOT NULL,
                 PRIMARY KEY (guild_id, channel_id)
             );
@@ -80,8 +80,19 @@ async def ensure_schema() -> None:
             db,
             """
             CREATE TABLE IF NOT EXISTS user_prefs (
-                user_id INTEGER PRIMARY KEY,
+                user_id  INTEGER PRIMARY KEY,
                 lang_code TEXT
+            );
+            """
+        )
+
+        # Bot emoji per guild
+        await _exec(
+            db,
+            """
+            CREATE TABLE IF NOT EXISTS bot_emote (
+                guild_id INTEGER PRIMARY KEY,
+                emote TEXT
             );
             """
         )
@@ -89,6 +100,10 @@ async def ensure_schema() -> None:
         await db.commit()
     finally:
         await db.close()
+
+# Backwards-compat alias (boot uses ensure_tables)
+async def ensure_tables() -> None:
+    await ensure_schema()
 
 # ---------- XP mutators ----------
 async def _upsert_base(db: aiosqlite.Connection, gid: int, uid: int) -> None:
@@ -155,7 +170,8 @@ async def add_voice_seconds(guild_id: int, user_id: int, seconds: int) -> None:
         await db.close()
 
 # ---------- XP queries ----------
-async def get_xp(guild_id: int, user_id: int) -> Tuple[int, int, int, int]:
+from typing import Tuple as _Tuple  # avoid shadowing
+async def get_xp(guild_id: int, user_id: int) -> _Tuple[int, int, int, int]:
     db = await _connect()
     try:
         row = await _one(
@@ -191,11 +207,10 @@ async def get_xp_leaderboard(guild_id: int, limit: int = LEADERBOARD_PAGE, offse
     finally:
         await db.close()
 
-# ---------- Translation config (used by your translator cog) ----------
+# ---------- Translation config ----------
 async def get_translation_channels(guild_id: int) -> Optional[List[int]]:
     db = await _connect()
     try:
-        # If there are rows, we treat it as allow-list. If none, return None -> allow all.
         rows = await _all(
             db,
             "SELECT channel_id FROM translate_channels WHERE guild_id = ?;",
@@ -252,5 +267,49 @@ async def get_user_lang(user_id: int) -> Optional[str]:
     try:
         row = await _one(db, "SELECT lang_code FROM user_prefs WHERE user_id = ?;", (user_id,))
         return row[0] if row else None
+    finally:
+        await db.close()
+
+# ---------- Guild emote ----------
+async def set_bot_emote(guild_id: int, emote: str) -> None:
+    db = await _connect()
+    try:
+        await _exec(
+            db,
+            """
+            INSERT INTO bot_emote (guild_id, emote) VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET emote = excluded.emote;
+            """,
+            (guild_id, emote),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+async def get_bot_emote(guild_id: int) -> Optional[str]:
+    db = await _connect()
+    try:
+        row = await _one(db, "SELECT emote FROM bot_emote WHERE guild_id = ?;", (guild_id,))
+        return row[0] if row else None
+    finally:
+        await db.close()
+
+# ---------- Activity aggregator (messages/translations in one call) ----------
+async def add_activity(guild_id: int, user_id: int, xp: int = 0, messages: int = 0, translations: int = 0) -> None:
+    db = await _connect()
+    try:
+        await _upsert_base(db, guild_id, user_id)
+        await _exec(
+            db,
+            """
+            UPDATE xp
+               SET xp = xp + ?,
+                   messages = messages + ?,
+                   translations = translations + ?
+             WHERE guild_id = ? AND user_id = ?;
+            """,
+            (max(0, int(xp)), int(messages), int(translations), guild_id, user_id),
+        )
+        await db.commit()
     finally:
         await db.close()
