@@ -17,6 +17,8 @@ class Ops(commands.Cog):
     )
 
     @ops.command(name="ping", description="Latency check (gateway & REST).")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def ops_ping(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True, ephemeral=True)
         gw = round(self.bot.latency * 1000)
@@ -31,6 +33,7 @@ class Ops(commands.Cog):
 
     @ops.command(name="sync", description="Resync slash commands.")
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def ops_sync(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True, ephemeral=True)
         await self.bot.tree.sync()
@@ -38,6 +41,7 @@ class Ops(commands.Cog):
 
     @ops.command(name="reload", description="Hot-reload all cogs.")
     @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def ops_reload(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True, ephemeral=True)
         failed = []
@@ -50,6 +54,8 @@ class Ops(commands.Cog):
         await interaction.followup.send(f"♻️ {note}", ephemeral=True)
 
     @ops.command(name="selftest", description="Run a short health check.")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def ops_selftest(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True, ephemeral=True)
         checks = [
