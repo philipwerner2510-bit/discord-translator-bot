@@ -3,9 +3,15 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from utils.brand import COLOR, footer, Z_CONFUSED
+from utils.brand import COLOR, footer
 from utils.database import get_user_lang, get_translation_channels
-from utils.logging_utils import log_analytics_event
+
+# Optional analytics logger (no-op if not present)
+try:
+    from utils.logging_utils import log_analytics_event  # type: ignore
+except Exception:
+    async def log_analytics_event(*args, **kwargs):
+        return None
 
 
 class AnalyticsCommands(commands.Cog):
@@ -22,14 +28,17 @@ class AnalyticsCommands(commands.Cog):
 
         e = discord.Embed(
             title="📊 Server Analytics",
+            description=(
+                f"**Your preferred language:** `{lang}`\n"
+                f"**Translation channels:** `{channel_count}`"
+            ),
             color=COLOR,
-            description=f"**Configured user language:** `{lang}`\n"
-                        f"**Translation channels:** `{channel_count}`"
         )
         e.set_footer(text=footer())
 
         await interaction.response.send_message(embed=e, ephemeral=False)
 
+        # Fire-and-forget analytics (if available)
         try:
             await log_analytics_event(gid, interaction.user.id, "stats_used")
         except Exception:
