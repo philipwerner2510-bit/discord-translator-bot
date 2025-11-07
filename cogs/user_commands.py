@@ -7,7 +7,6 @@ from utils.brand import COLOR, NAME
 from utils import database
 from utils.language_data import SUPPORTED_LANGUAGES, label
 
-# ----- helpers -----
 def _footer_text():
     try:
         from utils.brand import footer as _f
@@ -29,7 +28,6 @@ def _lang_choices(q: str):
 async def ac_lang(_, current: str):
     return _lang_choices(current)
 
-# ----- cog -----
 class UserCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -64,7 +62,6 @@ class UserCommands(commands.Cog):
         user = interaction.user
         guild = interaction.guild
 
-        # General tab (always)
         general = (
             "💬 **/translate**\n"
             "🌐 **/setmylang**\n"
@@ -74,7 +71,6 @@ class UserCommands(commands.Cog):
             "🔗 **/invite**\n"
         )
 
-        # Admin tab (Manage Guild)
         is_admin = False
         if guild and isinstance(user, discord.Member):
             is_admin = user.guild_permissions.manage_guild
@@ -88,7 +84,7 @@ class UserCommands(commands.Cog):
             "📋 **/langlist**\n"
         )
 
-        # Owner tab (env OWNER_IDS or application owner)
+        # owner check (env OWNER_IDS or app owner)
         is_owner = False
         owner_ids_env = []
         try:
@@ -106,9 +102,7 @@ class UserCommands(commands.Cog):
             except Exception:
                 pass
 
-        owner = (
-            "🏁 **/owner** — dashboard (Ping/Stats/Guilds/Reload buttons)\n"
-        )
+        owner = "🏁 **/owner** — dashboard (Ping/Stats/Guilds/Reload buttons)\n"
 
         desc = "### Commands\n" + general
         if is_admin:
@@ -119,7 +113,7 @@ class UserCommands(commands.Cog):
         e = discord.Embed(title="❓ Help", description=desc, color=COLOR).set_footer(text=_footer_text())
         await interaction.response.send_message(embed=e, ephemeral=True)
 
-    # Personal language with autocomplete (flag + code + name)
+    # Personal language with autocomplete
     @app_commands.autocomplete(code=ac_lang)
     @app_commands.describe(code="Your language (code)")
     @app_commands.command(name="setmylang", description="Set your personal language for DM translations.")
@@ -130,16 +124,6 @@ class UserCommands(commands.Cog):
             return await interaction.response.send_message("❌ Unknown language code.", ephemeral=True)
         await database.set_user_lang(interaction.user.id, code)
         await interaction.response.send_message(f"✅ Personal language set to **{label(code)}**.", ephemeral=True)
-
-    @app_commands.command(name="invite", description="Get the bot invite link")
-    async def invite(self, interaction: discord.Interaction):
-        # You said this is good; leaving as simple as possible.
-        e = discord.Embed(
-            title="🔗 Invite Zephyra",
-            description="[Click here to invite](https://discord.com/api/oauth2/authorize?scope=bot%20applications.commands&permissions=414531657792&client_id=1425590836800000170)",
-            color=COLOR
-        ).set_footer(text=_footer_text())
-        await interaction.response.send_message(embed=e, ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(UserCommands(bot))
