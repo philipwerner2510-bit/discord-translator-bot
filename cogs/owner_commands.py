@@ -1,6 +1,5 @@
 # cogs/owner_commands.py
 import os
-import time
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -14,8 +13,8 @@ def _footer_text():
     except Exception:
         return f"{NAME} — Developed by Polarix1954"
 
-def _is_owner_id(uid: int, appinfo_owner_id: int | None, env_ids: list[int]) -> bool:
-    return uid in env_ids or (appinfo_owner_id is not None and uid == appinfo_owner_id)
+def _is_owner_id(uid: int, app_owner_id: int | None, env_ids: list[int]) -> bool:
+    return uid in env_ids or (app_owner_id is not None and uid == app_owner_id)
 
 class OwnerDashView(discord.ui.View):
     def __init__(self, cog: "OwnerCommands"):
@@ -31,8 +30,7 @@ class OwnerDashView(discord.ui.View):
     async def stats(self, _, interaction: discord.Interaction):
         bot = interaction.client
         guilds = len(bot.guilds)
-        users = sum(g.member_count or 0 for g in bot.guilds)
-        # AI usage budget display from env (manual)
+        users = sum((g.member_count or 0) for g in bot.guilds)
         limit_eur = os.getenv("AI_BUDGET_EUR", "10")
         e = (
             discord.Embed(
@@ -59,8 +57,7 @@ class OwnerDashView(discord.ui.View):
     async def reload(self, _, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         bot: commands.Bot = interaction.client
-        failed = []
-        reloaded = []
+        failed, reloaded = [], []
         for ext in list(bot.extensions.keys()):
             try:
                 await bot.reload_extension(ext)
@@ -73,31 +70,30 @@ class OwnerDashView(discord.ui.View):
 class OwnerCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._owner_ids_env = []
         env = os.getenv("OWNER_IDS", "")
-        if env:
-            try:
-                self._owner_ids_env = [int(x) for x in env.replace(" ", "").split(",") if x]
-            except Exception:
-                self._owner_ids_env = []
-        self._app_owner_id = None
-        self.bot.loop.create_task(self._cache_owner())
+        try:
+            self._owner_ids_env = [int(x) for x in env.replace(" ", "").split(",") if x]
+        except Exception:
+            self._owner_ids_env = []
+        self._app_owner_id: int | None = None  # cached later
 
-    async def _cache_owner(self):
-        await self.bot.wait_until_ready()
+    async def _get_app_owner_id(self) -> int | None:
+        if self._app_owner_id is not None:
+            return self._app_owner_id
         try:
             appinfo = await self.bot.application_info()
             self._app_owner_id = appinfo.owner.id if appinfo and appinfo.owner else None
         except Exception:
             self._app_owner_id = None
+        return self._app_owner_id
 
     async def _owner_check(self, interaction: discord.Interaction) -> bool:
-        return _is_owner_id(interaction.user.id, self._app_owner_id, self._owner_ids_env)
+        app_owner = await self._get_app_owner_id()
+        return _is_owner_id(interaction.user.id, app_owner, self._owner_ids_env)
 
     def _ensure_owner(self):
         async def predicate(interaction: discord.Interaction):
-            ok = await self._owner_check(interaction)
-            return ok
+            return await self._owner_check(interaction)
         return app_commands.check(predicate)
 
     @app_commands.command(name="owner", description="Owner dashboard with buttons.")
