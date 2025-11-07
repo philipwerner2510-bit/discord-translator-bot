@@ -1,88 +1,116 @@
 # cogs/owner_commands.py
-import os, platform, time
+import os
+import time
 import discord
 from discord.ext import commands
 from discord import app_commands
-from utils.brand import COLOR, footer_text as _footer_text
-from utils import database
 
-def FOOT(): return _footer_text() if callable(_footer_text) else _footer_text
-OWNER_IDS = {int(x) for x in os.getenv("OWNER_IDS","1425590836800000170").split(",") if x.strip().isdigit()}
+from utils.brand import COLOR, NAME
 
-def check_owner():
-    def predicate(interaction: discord.Interaction) -> bool:
-        return interaction.user.id in OWNER_IDS
-    return app_commands.check(predicate)
+def _footer_text():
+    try:
+        from utils.brand import footer as _f
+        return _f() if callable(_f) else str(_f)
+    except Exception:
+        return f"{NAME} — Developed by Polarix1954"
 
-class OwnerView(discord.ui.View):
-    def __init__(self, cog, *, timeout=120):
-        super().__init__(timeout=timeout)
+def _is_owner_id(uid: int, appinfo_owner_id: int | None, env_ids: list[int]) -> bool:
+    return uid in env_ids or (appinfo_owner_id is not None and uid == appinfo_owner_id)
+
+class OwnerDashView(discord.ui.View):
+    def __init__(self, cog: "OwnerCommands"):
+        super().__init__(timeout=120)
         self.cog = cog
 
-    @discord.ui.button(label="Stats", style=discord.ButtonStyle.primary)
-    async def stats(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.render_stats(interaction)
+    @discord.ui.button(label="Ping", style=discord.ButtonStyle.primary, emoji="🏁")
+    async def ping(self, _, interaction: discord.Interaction):
+        latency_ms = round(interaction.client.latency * 1000)
+        await interaction.response.send_message(f"Pong! `{latency_ms}ms`", ephemeral=True)
 
-    @discord.ui.button(label="Guilds", style=discord.ButtonStyle.secondary)
-    async def guilds(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.render_guilds(interaction)
-
-    @discord.ui.button(label="Self-test", style=discord.ButtonStyle.success)
-    async def selftest(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.render_selftest(interaction)
-
-    @discord.ui.button(label="Reload Cogs", style=discord.ButtonStyle.danger)
-    async def reload(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.reload_all(interaction)
-
-class Owner(commands.Cog):
-    def __init__(self, bot): self.bot = bot
-
-    @app_commands.command(name="owner", description="Owner control panel.")
-    @check_owner()
-    async def owner(self, interaction: discord.Interaction):
-        await self.render_stats(interaction, new_message=True)
-
-    async def render_stats(self, interaction: discord.Interaction, new_message: bool=False):
-        bot = self.bot
+    @discord.ui.button(label="Stats", style=discord.ButtonStyle.secondary, emoji="📊")
+    async def stats(self, _, interaction: discord.Interaction):
+        bot = interaction.client
         guilds = len(bot.guilds)
         users = sum(g.member_count or 0 for g in bot.guilds)
-        py = platform.python_version()
-        e = (discord.Embed(title="Owner — Stats", color=COLOR)
-             .add_field(name="Guilds", value=str(guilds))
-             .add_field(name="Users (approx)", value=str(users))
-             .add_field(name="Python", value=py)
-             .set_footer(text=FOOT()))
-        view = OwnerView(self)
-        if new_message:
-            await interaction.response.send_message(embed=e, view=view, ephemeral=True)
-        else:
-            await interaction.response.edit_message(embed=e, view=view)
+        # AI usage budget display from env (manual)
+        limit_eur = os.getenv("AI_BUDGET_EUR", "10")
+        e = (
+            discord.Embed(
+                title="📊 Owner Stats",
+                description=(
+                    f"Servers: **{guilds}**\n"
+                    f"Users (approx): **{users}**\n"
+                    f"AI budget limit: **€{limit_eur}**\n"
+                ),
+                color=COLOR,
+            ).set_footer(text=_footer_text())
+        )
+        await interaction.response.send_message(embed=e, ephemeral=True)
 
-    async def render_guilds(self, interaction: discord.Interaction):
+    @discord.ui.button(label="Guilds", style=discord.ButtonStyle.secondary, emoji="🧭")
+    async def guilds(self, _, interaction: discord.Interaction):
         lines = []
-        for g in sorted(self.bot.guilds, key=lambda x: x.member_count or 0, reverse=True)[:25]:
-            lines.append(f"{g.name} — `{g.id}` — {g.member_count} members")
-        e = discord.Embed(title="Owner — Guilds (top 25)", description="\n".join(lines) or "No guilds.", color=COLOR)
-        e.set_footer(text=FOOT())
-        await interaction.response.edit_message(embed=e, view=OwnerView(self))
+        for g in sorted(interaction.client.guilds, key=lambda x: x.member_count or 0, reverse=True)[:20]:
+            lines.append(f"• **{g.name}** — {g.member_count} users (id `{g.id}`)")
+        e = discord.Embed(title="🧭 Guilds (Top 20)", description="\n".join(lines) or "None", color=COLOR).set_footer(text=_footer_text())
+        await interaction.response.send_message(embed=e, ephemeral=True)
 
-    async def render_selftest(self, interaction: discord.Interaction):
-        e = discord.Embed(title="Owner — Self-test", description="All systems nominal.", color=COLOR)
-        e.set_footer(text=FOOT())
-        await interaction.response.edit_message(embed=e, view=OwnerView(self))
-
-    async def reload_all(self, interaction: discord.Interaction):
+    @discord.ui.button(label="Reload Cogs", style=discord.ButtonStyle.danger, emoji="🔁")
+    async def reload(self, _, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        bot: commands.Bot = interaction.client
         failed = []
-        for ext in list(self.bot.extensions.keys()):
+        reloaded = []
+        for ext in list(bot.extensions.keys()):
             try:
-                await self.bot.reload_extension(ext)
-            except Exception as ex:
-                failed.append(f"{ext}: {ex}")
-        msg = "Reloaded all cogs." if not failed else "Reload completed with errors:\n" + "\n".join(failed)
-        e = discord.Embed(title="Owner — Reload", description=msg, color=COLOR)
-        e.set_footer(text=FOOT())
-        await interaction.response.edit_message(embed=e, view=OwnerView(self))
+                await bot.reload_extension(ext)
+                reloaded.append(ext)
+            except Exception:
+                failed.append(ext)
+        msg = f"🔁 Reloaded: {len(reloaded)} | ❌ Failed: {len(failed)}"
+        await interaction.followup.send(msg, ephemeral=True)
 
-async def setup(bot):
-    await bot.add_cog(Owner(bot))
+class OwnerCommands(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self._owner_ids_env = []
+        env = os.getenv("OWNER_IDS", "")
+        if env:
+            try:
+                self._owner_ids_env = [int(x) for x in env.replace(" ", "").split(",") if x]
+            except Exception:
+                self._owner_ids_env = []
+        self._app_owner_id = None
+        self.bot.loop.create_task(self._cache_owner())
+
+    async def _cache_owner(self):
+        await self.bot.wait_until_ready()
+        try:
+            appinfo = await self.bot.application_info()
+            self._app_owner_id = appinfo.owner.id if appinfo and appinfo.owner else None
+        except Exception:
+            self._app_owner_id = None
+
+    async def _owner_check(self, interaction: discord.Interaction) -> bool:
+        return _is_owner_id(interaction.user.id, self._app_owner_id, self._owner_ids_env)
+
+    def _ensure_owner(self):
+        async def predicate(interaction: discord.Interaction):
+            ok = await self._owner_check(interaction)
+            return ok
+        return app_commands.check(predicate)
+
+    @app_commands.command(name="owner", description="Owner dashboard with buttons.")
+    async def owner(self, interaction: discord.Interaction):
+        if not await self._owner_check(interaction):
+            return await interaction.response.send_message("Nope.", ephemeral=True)
+        view = OwnerDashView(self)
+        e = discord.Embed(
+            title="🛡 Owner Dashboard",
+            description="Use the buttons below: **Ping**, **Stats**, **Guilds**, **Reload Cogs**.",
+            color=COLOR
+        ).set_footer(text=_footer_text())
+        await interaction.response.send_message(embed=e, view=view, ephemeral=True)
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(OwnerCommands(bot))
