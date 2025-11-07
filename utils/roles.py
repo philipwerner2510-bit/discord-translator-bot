@@ -1,5 +1,5 @@
 # utils/roles.py
-# Helpers for level-role names and colors (centralized)
+# Helpers for level-role names and colors (centralized) + compatibility shim
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def gradient_color(start_hex: str, end_hex: str, t: float) -> int:
     t = clamp01(t)
     r1,g1,b1 = hex_to_rgb(start_hex)
     r2,g2,b2 = hex_to_rgb(end_hex)
-    return rgb_to_int(lerp(r1,r2,t), lerp(g1,g2,t), lerp(b1,b2,t))
+    return rgb_to_int(lerp(r1,r2,t), lerp(g1,g2,t))
 
 def level_bucket(index: int) -> tuple[int,int]:
     """
@@ -67,3 +67,19 @@ def make_level_role_specs(
         name = role_name_for_index(i, custom_names)
         specs.append((ls, le, name, color))
     return specs
+
+# ---- COMPAT SHIM (for older cogs importing `role_ladder`) ----
+def role_ladder(
+    start_hex: str = START_HEX,
+    end_hex: str = END_HEX,
+    custom_names: list[str] | None = None
+) -> list[tuple[str, int]]:
+    """
+    Legacy API expected by some cogs:
+    Returns list of 10 tuples (role_name, color_int).
+    """
+    specs = make_level_role_specs(start_hex, end_hex, custom_names)
+    return [(name, color) for (_ls, _le, name, color) in specs]
+
+# Optional constant if anyone wants it precomputed
+ROLE_SPECS = make_level_role_specs()
