@@ -1,7 +1,7 @@
 # utils/database.py
 # Persistent SQLite storage for Zephyra (xp, prefs, guild config, roles)
 import os
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple
 import aiosqlite
 
 DB_PATH = os.getenv("BOT_DB_PATH", "/mnt/data/bot_data.db")
@@ -15,15 +15,27 @@ async def _connect() -> aiosqlite.Connection:
     return db
 
 async def _exec(db: aiosqlite.Connection, sql: str, params: tuple = ()) -> None:
-    cur = await db.execute(sql, params); await cur.close()
+    cur = await db.execute(sql, params)
+    await cur.close()
 
 async def _one(db: aiosqlite.Connection, sql: str, params: tuple = ()):
-    cur = await db.execute(sql, params); row = await cur.fetchone(); await cur.close(); return row
+    cur = await db.execute(sql, params)
+    row = await cur.fetchone()
+    await cur.close()
+    return row
 
 async def _all(db: aiosqlite.Connection, sql: str, params: tuple = ()):
-    cur = await db.execute(sql, params); rows = await cur.fetchall(); await cur.close(); return rows
+    cur = await db.execute(sql, params)
+    rows = await cur.fetchall()
+    await cur.close()
+    return rows
 
-# ---------- schema ----------
+async def _column_exists(db: aiosqlite.Connection, table: str, column: str) -> bool:
+    info = await _all(db, f"PRAGMA table_info({table});")
+    cols = {r[1] for r in info}  # (cid, name, type, notnull, dflt, pk)
+    return column in cols
+
+# ---------- schema (with lightweight migration) ----------
 async def ensure_schema() -> None:
     db = await _connect()
     try:
@@ -40,14 +52,14 @@ async def ensure_schema() -> None:
         );
         """)
 
-        # Guild settings (language + allow-list mode)
+        # Guild settings (may exist from older schema without server_lang)
         await _exec(db, """
         CREATE TABLE IF NOT EXISTS guild_settings(
-          guild_id INTEGER PRIMARY KEY,
-          server_lang TEXT,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          guild_id INTEGER PRIMARY KEY
         );
         """)
+        if not await _column_exists(db, "guild_settings", "server_lang"):
+            await _exec(db, "ALTER TABLE guild_settings ADD COLUMN server_lang TEXT;")
 
         # Translation channel allow-list
         await _exec(db, """
@@ -75,7 +87,7 @@ async def ensure_schema() -> None:
         );
         """)
 
-        # Level role table mapping (every 10 levels: 1-10,11-20,...,91-100)
+        # Level role ladder
         await _exec(db, """
         CREATE TABLE IF NOT EXISTS level_roles(
           guild_id INTEGER NOT NULL,
@@ -91,12 +103,12 @@ async def ensure_schema() -> None:
 
 # ---------- XP ----------
 async def _upsert_xp(db: aiosqlite.Connection, gid: int, uid: int) -> None:
-    await _exec(db, "INSERT OR IGNORE INTO xp(guild_id,user_id) VALUES(?,?)", (gid,uid))
+    await _exec(db, "INSERT OR IGNORE INTO xp(guild_id,user_id) VALUES(?,?)", (gid, uid))
 
 async def add_message_xp(guild_id:int, user_id:int, delta:int) -> None:
     db = await _connect()
     try:
-        await _upsert_xp(db,guild_id,user_id)
+        await _upsert_xp(db, guild_id, user_id)
         await _exec(db, "UPDATE xp SET xp=xp+?, messages=messages+1 WHERE guild_id=? AND user_id=?",
                     (max(0,int(delta)), guild_id, user_id))
         await db.commit()
@@ -106,7 +118,7 @@ async def add_message_xp(guild_id:int, user_id:int, delta:int) -> None:
 async def add_translation_xp(guild_id:int, user_id:int, delta:int) -> None:
     db = await _connect()
     try:
-        await _upsert_xp(db,guild_id,user_id)
+        await _upsert_xp(db, guild_id, user_id)
         await _exec(db, "UPDATE xp SET xp=xp+?, translations=translations+1 WHERE guild_id=? AND user_id=?",
                     (max(0,int(delta)), guild_id, user_id))
         await db.commit()
@@ -114,10 +126,11 @@ async def add_translation_xp(guild_id:int, user_id:int, delta:int) -> None:
         await db.close()
 
 async def add_voice_seconds(guild_id:int, user_id:int, seconds:int) -> None:
-    if seconds<=0: return
+    if seconds <= 0:
+        return
     db = await _connect()
     try:
-        await _upsert_xp(db,guild_id,user_id)
+        await _upsert_xp(db, guild_id, user_id)
         await _exec(db, "UPDATE xp SET voice_seconds=voice_seconds+? WHERE guild_id=? AND user_id=?",
                     (int(seconds), guild_id, user_id))
         await db.commit()
@@ -128,8 +141,10 @@ async def get_xp(guild_id:int, user_id:int) -> Tuple[int,int,int,int]:
     db = await _connect()
     try:
         row = await _one(db, "SELECT xp,messages,translations,voice_seconds FROM xp WHERE guild_id=? AND user_id=?",
-                         (guild_id,user_id))
-        return (0,0,0,0) if not row else tuple(int(x) for x in row)
+                         (guild_id, user_id))
+        if not row:
+            return (0,0,0,0)
+        return (int(row[0]), int(row[1]), int(row[2]), int(row[3]))
     finally:
         await db.close()
 
@@ -139,7 +154,7 @@ async def get_xp_leaderboard(guild_id:int, limit:int=10, offset:int=0):
         return await _all(db, """
           SELECT user_id, xp, messages, translations, voice_seconds
             FROM xp WHERE guild_id=?
-           ORDER BY xp DESC, messages DESC LIMIT ? OFFSET ?""", (guild_id,limit,offset))
+           ORDER BY xp DESC, messages DESC LIMIT ? OFFSET ?""", (guild_id, limit, offset))
     finally:
         await db.close()
 
@@ -150,7 +165,7 @@ async def set_server_lang(guild_id:int, code:str) -> None:
         await _exec(db, """
         INSERT INTO guild_settings(guild_id,server_lang) VALUES(?,?)
         ON CONFLICT(guild_id) DO UPDATE SET server_lang=excluded.server_lang
-        """,(guild_id,code))
+        """, (guild_id, code))
         await db.commit()
     finally:
         await db.close()
@@ -175,7 +190,7 @@ async def allow_translation_channel(guild_id:int, channel_id:int) -> None:
     db = await _connect()
     try:
         await _exec(db, "INSERT OR IGNORE INTO translate_channels(guild_id,channel_id) VALUES(?,?)",
-                    (guild_id,channel_id))
+                    (guild_id, channel_id))
         await db.commit()
     finally:
         await db.close()
@@ -184,7 +199,7 @@ async def remove_translation_channel(guild_id:int, channel_id:int) -> None:
     db = await _connect()
     try:
         await _exec(db, "DELETE FROM translate_channels WHERE guild_id=? AND channel_id=?",
-                    (guild_id,channel_id))
+                    (guild_id, channel_id))
         await db.commit()
     finally:
         await db.close()
@@ -195,7 +210,7 @@ async def set_user_lang(user_id:int, code:str) -> None:
         await _exec(db, """
         INSERT INTO user_prefs(user_id,lang_code) VALUES(?,?)
         ON CONFLICT(user_id) DO UPDATE SET lang_code=excluded.lang_code
-        """,(user_id,code))
+        """, (user_id, code))
         await db.commit()
     finally:
         await db.close()
@@ -209,13 +224,13 @@ async def get_user_lang(user_id:int) -> Optional[str]:
         await db.close()
 
 # meta: error channel & emote
-async def set_error_channel(guild_id:int, channel_id:int|None) -> None:
+async def set_error_channel(guild_id:int, channel_id:Optional[int]) -> None:
     db = await _connect()
     try:
         await _exec(db, """
         INSERT INTO guild_meta(guild_id,error_channel_id) VALUES(?,?)
         ON CONFLICT(guild_id) DO UPDATE SET error_channel_id=excluded.error_channel_id
-        """,(guild_id,channel_id))
+        """, (guild_id, channel_id))
         await db.commit()
     finally:
         await db.close()
@@ -234,7 +249,7 @@ async def set_bot_emote(guild_id:int, emote:str) -> None:
         await _exec(db, """
         INSERT INTO guild_meta(guild_id,bot_emote) VALUES(?,?)
         ON CONFLICT(guild_id) DO UPDATE SET bot_emote=excluded.bot_emote
-        """,(guild_id,emote))
+        """, (guild_id, emote))
         await db.commit()
     finally:
         await db.close()
@@ -249,13 +264,14 @@ async def get_bot_emote(guild_id:int) -> Optional[str]:
 
 # ---------- level roles ----------
 async def upsert_role_table(guild_id:int, mapping:List[Tuple[int,int,int]]) -> None:
-    """mapping: list of (lvl_start, lvl_end, role_id)"""
     db = await _connect()
     try:
         await _exec(db, "DELETE FROM level_roles WHERE guild_id=?", (guild_id,))
         for ls, le, rid in mapping:
-            await _exec(db, "INSERT INTO level_roles(guild_id,lvl_start,lvl_end,role_id) VALUES(?,?,?,?)",
-                        (guild_id, ls, le, rid))
+            await _exec(db,
+                "INSERT INTO level_roles(guild_id,lvl_start,lvl_end,role_id) VALUES(?,?,?,?)",
+                (guild_id, ls, le, rid)
+            )
         await db.commit()
     finally:
         await db.close()
@@ -263,8 +279,9 @@ async def upsert_role_table(guild_id:int, mapping:List[Tuple[int,int,int]]) -> N
 async def get_role_table(guild_id:int) -> List[Tuple[int,int,int]]:
     db = await _connect()
     try:
-        rows = await _all(db, "SELECT lvl_start,lvl_end,role_id FROM level_roles WHERE guild_id=? ORDER BY lvl_start",
-                          (guild_id,))
+        rows = await _all(db,
+            "SELECT lvl_start,lvl_end,role_id FROM level_roles WHERE guild_id=? ORDER BY lvl_start",
+            (guild_id,))
         return [(int(a),int(b),int(c)) for a,b,c in rows]
     finally:
         await db.close()
