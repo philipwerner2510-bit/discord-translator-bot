@@ -1,8 +1,8 @@
 # cogs/owner_commands.py
+import traceback
 import discord
 from discord.ext import commands
 from discord import app_commands
-import traceback
 
 try:
     from utils.brand import COLOR
@@ -29,21 +29,21 @@ class OwnerDashView(discord.ui.View):
         super().__init__(timeout=120)
         self.bot = bot
 
-    @discord.ui.Button(label="Ping", emoji="🏁", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Ping", emoji="🏁", style=discord.ButtonStyle.primary)
     async def ping(self, interaction: discord.Interaction, button: discord.ui.Button):
         latency_ms = round(self.bot.latency * 1000)
         e = discord.Embed(description=f"🏁 Latency: **{latency_ms} ms**", color=COLOR)
         e.set_footer(text=BRAND_FOOTER)
         await interaction.response.edit_message(embed=e, view=self)
 
-    @discord.ui.Button(label="Stats", emoji="📊", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Stats", emoji="📊", style=discord.ButtonStyle.secondary)
     async def stats(self, interaction: discord.Interaction, button: discord.ui.Button):
         users = sum((g.member_count or 0) for g in self.bot.guilds)
         e = discord.Embed(description=f"📊 Servers: **{len(self.bot.guilds)}**\n👥 Approx users: **{users}**", color=COLOR)
         e.set_footer(text=BRAND_FOOTER)
         await interaction.response.edit_message(embed=e, view=self)
 
-    @discord.ui.Button(label="Guilds", emoji="🧭", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Guilds", emoji="🧭", style=discord.ButtonStyle.secondary)
     async def guilds(self, interaction: discord.Interaction, button: discord.ui.Button):
         lines = []
         for g in sorted(self.bot.guilds, key=lambda x: x.member_count or 0, reverse=True)[:20]:
@@ -52,7 +52,7 @@ class OwnerDashView(discord.ui.View):
         e.set_footer(text=BRAND_FOOTER)
         await interaction.response.edit_message(embed=e, view=self)
 
-    @discord.ui.Button(label="Reload Cogs", emoji="🔁", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Reload Cogs", emoji="🔁", style=discord.ButtonStyle.danger)
     async def reload(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True, thinking=True)
         failed = []
