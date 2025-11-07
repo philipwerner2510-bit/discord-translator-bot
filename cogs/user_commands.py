@@ -22,7 +22,6 @@ def is_admin(member: discord.Member) -> bool:
 def is_owner(user: discord.User, app: discord.ClientApplication | None) -> bool:
     if not app:
         return False
-    # app.owner can be Team or User; simplify to user id match if present
     try:
         if hasattr(app.owner, "id"):
             return app.owner.id == user.id
@@ -36,20 +35,26 @@ class HelpView(discord.ui.View):
         self.show_admin = show_admin
         self.show_owner = show_owner
 
-        self.add_item(discord.ui.Button(label="Invite", style=discord.ButtonStyle.link,
-                        url="https://discord.com/api/oauth2/authorize?client_id=1425590836800000170&permissions=8&scope=bot%20applications.commands"))
-        self.add_item(discord.ui.Button(label="Support", style=discord.ButtonStyle.link,
-                        url="https://discord.gg/"))
+        self.add_item(discord.ui.Button(
+            label="Invite",
+            style=discord.ButtonStyle.link,
+            url="https://discord.com/api/oauth2/authorize?client_id=1425590836800000170&permissions=8&scope=bot%20applications.commands"
+        ))
+        self.add_item(discord.ui.Button(
+            label="Support",
+            style=discord.ButtonStyle.link,
+            url="https://discord.gg/"
+        ))
 
-        # Nav buttons
+        # Navigation buttons
         self.add_item(self._btn("General", "✨", "general"))
         if self.show_admin:
             self.add_item(self._btn("Admin", "🛠️", "admin"))
         if self.show_owner:
             self.add_item(self._btn("Owner", "👑", "owner"))
 
-    def _btn(self, label: str, emoji: str, key: str):
-        b = discord.ui.Button(label=label, emoji=emoji, style=discord.ButtonStyle.primary)
+    def _btn(self, label_txt: str, emoji: str, key: str):
+        b = discord.ui.Button(label=label_txt, emoji=emoji, style=discord.ButtonStyle.primary)
         async def cb(inter: discord.Interaction):
             embed = build_help_embed(key, self.show_admin, self.show_owner)
             await inter.response.edit_message(embed=embed, view=self)
@@ -86,17 +91,20 @@ def build_help_embed(section: str, show_admin: bool, show_owner: bool) -> discor
     )
 
     if section == "admin":
-        e.description = f"✨ **General**\n{general}\n🛠️ **Admin**\n{admin}"
+        desc = "✨ **General**\n" + general + "\n🛠️ **Admin**\n" + admin
     elif section == "owner":
-        add = admin if show_admin else ""
-        e.description = f"✨ **General**\n{general}\n{('🛠️ **Admin**\\n'+add) if add else ''}\n👑 **Owner**\n{owner}"
-    else:
-        # general
-        e.description = f"✨ **General**\n{general}"
+        desc = "✨ **General**\n" + general
         if show_admin:
-            e.description += f"\n🛠️ **Admin**\n{admin}"
+            desc += "\n🛠️ **Admin**\n" + admin
+        desc += "\n👑 **Owner**\n" + owner
+    else:
+        desc = "✨ **General**\n" + general
+        if show_admin:
+            desc += "\n🛠️ **Admin**\n" + admin
         if show_owner:
-            e.description += f"\n👑 **Owner**\n{owner}"
+            desc += "\n👑 **Owner**\n" + owner
+
+    e.description = desc
     return e
 
 class UserCommands(commands.Cog):
