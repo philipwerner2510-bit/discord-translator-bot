@@ -6,7 +6,7 @@ from discord import app_commands
 from utils.language_data import SUPPORTED_LANGUAGES, label
 from utils import database
 
-# brand-safe footer import (string or fallback)
+# brand-safe imports
 try:
     from utils.brand import COLOR
 except Exception:
@@ -16,18 +16,16 @@ try:
 except Exception:
     BRAND_FOOTER = "Zephyra • /help for commands"
 
-def is_admin(member: discord.Member) -> bool:
-    return member.guild_permissions.manage_guild if member else False
+def is_admin(member: discord.Member | None) -> bool:
+    return bool(member and member.guild_permissions.manage_guild)
 
-def is_owner(user: discord.User, app: discord.ClientApplication | None) -> bool:
-    if not app:
-        return False
+def is_owner(user: discord.User, app_info) -> bool:
+    # app_info is discord.AppInfo; avoid version-specific typing
     try:
-        if hasattr(app.owner, "id"):
-            return app.owner.id == user.id
+        owner = getattr(app_info, "owner", None)
+        return bool(owner and getattr(owner, "id", None) == user.id)
     except Exception:
-        pass
-    return False
+        return False
 
 class HelpView(discord.ui.View):
     def __init__(self, show_admin: bool, show_owner: bool):
@@ -35,6 +33,7 @@ class HelpView(discord.ui.View):
         self.show_admin = show_admin
         self.show_owner = show_owner
 
+        # Links
         self.add_item(discord.ui.Button(
             label="Invite",
             style=discord.ButtonStyle.link,
@@ -46,7 +45,7 @@ class HelpView(discord.ui.View):
             url="https://discord.gg/"
         ))
 
-        # Navigation buttons
+        # Tabs
         self.add_item(self._btn("General", "✨", "general"))
         if self.show_admin:
             self.add_item(self._btn("Admin", "🛠️", "admin"))
@@ -77,8 +76,8 @@ def build_help_embed(section: str, show_admin: bool, show_owner: bool) -> discor
     admin = (
         "**Admin**\n"
         "• `/defaultlang code:<code>` — Set server default language\n"
-        "• `/settings` — Show config (emote, error channel, allowed channels)\n"
-        "• `/setemote emote:<emoji or <:name:id>>` — Set translate reaction\n"
+        "• `/settings` — Emote, error channel & allowed channels\n"
+        "• `/setemote emote:<emoji or <:name:id>>` — Translate reaction\n"
         "• `/seterrorchannel [channel]` — Set/clear error channel\n"
         "• `/roles setup` — Create level role ladder (1-100)\n"
         "• `/roles show` — Show the ladder\n"
@@ -117,11 +116,11 @@ class UserCommands(commands.Cog):
             title="🌬️ Zephyra — Quick Start",
             description=(
                 "✨ **Translate fast:** React with your server emote or use `/translate`.\n"
-                "🌐 **Languages:** Set server default with `/defaultlang`, personal with `/setmylang`.\n"
-                "💬 **Channels:** Limit auto-translate to certain channels via allow-list.\n"
-                "📈 **XP system:** Messages, translations, and voice give XP → roles.\n"
-                "🏆 **Profiles:** `/profile` to see your tilted progress bar.\n"
-                "⚙️ **Settings:** `/settings` shows emote, error channel & allowed channels."
+                "🌐 **Languages:** `/defaultlang` for server, `/setmylang` for you.\n"
+                "💬 **Channels:** Limit auto-translate to selected channels.\n"
+                "📈 **XP:** Messages, translations, voice → roles.\n"
+                "🏆 **Profiles:** `/profile` for a clean tilted progress bar.\n"
+                "⚙️ **Settings:** `/settings` shows emote, error channel & channels."
             ),
             color=COLOR
         )
